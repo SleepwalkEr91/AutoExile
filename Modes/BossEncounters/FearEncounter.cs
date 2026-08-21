@@ -9,562 +9,729 @@ using System.Numerics;
 namespace AutoExile.Modes.BossEncounters
 {
     /// <summary>
-    /// Incarnation of Fear (Anger Boss UBER) encounter.
+    /// Searing Exarch encounter.
     ///
-    /// Strategy: pre-lay traps during invuln, pop flasks at emerge, orbit boss with
-    /// frostblink while spamming traps. After kill, navigate to boss death position
-    /// and loot sweep before signaling Complete.
+    /// IMPORTANT:
+    /// This class intentionally remains named FearEncounter so existing
+    /// AutoExile code/settings do not need to be changed.
     ///
-    /// Re-entry: navigate to AreaTransition (must stay north of it for targetability),
-    /// click it to enter boss room proper, then fight.
+    /// Fragment: CurrencyCleansingFireBossKey
+    /// Boss: SearingExarch
     ///
-    /// Fragment: CurrencyUberBossKeyAnger, cost=4
-    /// Boss: AngerBossUBER@85, spawns at (206,306)
-    /// AreaTransition: (207,152), targetable only when player Y &lt; ~155
+    /// Strategy:
+    /// - Move to the existing FearDpsPosition setting.
+    /// - Find the Searing Exarch.
+    /// - Let normal combat handle DPS/movement.
+    /// - Track the boss position.
+    /// - Detect boss death.
+    /// - Navigate to the death position.
+    /// - Perform the existing loot sweep.
+    ///
+    /// Re-entry:
+    /// - If the player dies and re-enters the zone, the encounter resumes
+    ///   when the Exarch becomes visible again.
     /// </summary>
     public class FearEncounter : IBossEncounter
     {
-        public string Name => "Incarnation of Fear";
+        // Keep the public encounter identity compatible with the rest
+        // of the bot.
+        public string Name => "Searing Exarch";
+
         public string Status { get; private set; } = "";
 
-        private const string FragmentPath = "CurrencyUberBossKeyAnger";
-        private const string BossPath = "AngerBossUBER@";
+        // Searing Exarch invitation / fragment.
+        private const string FragmentPath = "CurrencyCleansingFireBossKey";
 
-        // Default pre-lay position SOUTH of boss — traps land directly on boss at (206,306).
-        private static readonly Vector2 DefaultDpsPosition = new(206, 320);
+        // Intentionally broad match.
+        // Once the exact ExileAPI path is confirmed, this can be made exact.
+        private const string BossPath = "SearingExarch";
 
-        // Re-entry: position to stand NORTH of the area transition so it's targetable.
-        // Transition at (207,152) — must be at Y < ~155 to click it.
-        private static readonly Vector2 TransitionApproachPos = new(207, 145);
+        // Keep the existing setting name so no other files need changing.
+        private static readonly Vector2 DefaultDpsPosition = new(0, 0);
 
         private static Vector2 GetDpsPosition(BotSettings settings)
         {
             var text = settings.Boss.FearDpsPosition?.Value;
+
             if (!string.IsNullOrWhiteSpace(text))
             {
                 var parts = text.Split(',');
+
                 if (parts.Length == 2 &&
                     float.TryParse(parts[0].Trim(), out var x) &&
                     float.TryParse(parts[1].Trim(), out var y))
+                {
                     return new Vector2(x, y);
+                }
             }
+
             return DefaultDpsPosition;
         }
-
-        // Orbit
-        private const float OrbitRadius = 20f;
-        private const float OrbitBlinkIntervalMs = 2500f;
 
         public Func<Element, bool> MapFilter => el =>
         {
             var entity = el.Entity;
+
             return entity?.Path?.Contains(FragmentPath) == true;
         };
 
         public string? InventoryFragmentPath => FragmentPath;
-        public int FragmentCost => 4;
 
-        // Suppress combat during first-entry approach (don't chase untargetable boss)
-        // and during re-entry approach (need to click area transition, not fight)
-        public bool SuppressCombat => _phase == FearPhase.Approaching;
+        public int FragmentCost => 1;
 
-        // Suppress positioning during invuln (stay planted for trap pre-lay)
-        // and during loot sweep (stay at death position)
-        public bool SuppressCombatPositioning => _phase == FearPhase.WaitForVulnerable
-            || _phase == FearPhase.WaitingForLoot;
+        // Unlike Fear, Exarch does not need combat suppressed while
+        // waiting for a special "emerge" state.
+        public bool SuppressCombat =>
+            _phase == FearPhase.Approaching;
 
-        // ── State ──
+        // Prevent normal combat positioning from pulling us away from
+        // the boss death position while looting.
+        public bool SuppressCombatPositioning =>
+            _phase == FearPhase.WaitingForLoot;
+
+        // ─────────────────────────────────────────────
+        // State
+        // ─────────────────────────────────────────────
+
         private FearPhase _phase = FearPhase.Idle;
+
         private DateTime _phaseStartTime;
+
         private Entity? _bossEntity;
+
         private bool _bossWasAlive;
-        private bool _bossVulnerable;
-        private bool _bossEmerged;
+
         private bool _isReentry;
+
         private Vector2? _bossDeathPos;
+
         private DateTime _lastLootScan;
-
-        // Orbit state
-        private float _orbitAngle;
-        private DateTime _lastOrbitBlink;
-
-        // Re-entry transition click
-        private DateTime _lastTransitionClickTime;
-        private int _transitionClickAttempts;
 
         private enum FearPhase
         {
             Idle,
             Approaching,
-            WaitForVulnerable,
             Fighting,
-            WaitingForLoot,  // Navigate to death pos, scan loot, wait for timeout → Complete
+            WaitingForLoot,
         }
+
+        // ─────────────────────────────────────────────
+        // Zone Entry
+        // ─────────────────────────────────────────────
 
         public void OnEnterZone(BotContext ctx)
         {
             var gc = ctx.Game;
 
-            var pfGrid = gc.IngameState?.Data?.RawPathfindingData;
-            var tgtGrid = gc.IngameState?.Data?.RawTerrainTargetingData;
+            var pfGrid =
+                gc.IngameState?.Data?.RawPathfindingData;
+
+            var tgtGrid =
+                gc.IngameState?.Data?.RawTerrainTargetingData;
+
             if (pfGrid != null && gc.Player != null)
             {
-                var playerGrid = new Vector2(gc.Player.GridPosNum.X, gc.Player.GridPosNum.Y);
-                ctx.Exploration.Initialize(pfGrid, tgtGrid, playerGrid,
+                var playerGrid = new Vector2(
+                    gc.Player.GridPosNum.X,
+                    gc.Player.GridPosNum.Y);
+
+                ctx.Exploration.Initialize(
+                    pfGrid,
+                    tgtGrid,
+                    playerGrid,
                     ctx.Settings.Build.BlinkRange.Value);
             }
 
+            // If we had previously seen a living boss, assume this
+            // is a re-entry after death.
             _isReentry = _bossWasAlive;
+
             _phase = FearPhase.Approaching;
+
             _phaseStartTime = DateTime.Now;
+
             _bossEntity = null;
-            _bossVulnerable = false;
-            _bossEmerged = false;
-            _orbitAngle = 0;
-            _lastOrbitBlink = DateTime.MinValue;
-            _lastTransitionClickTime = DateTime.MinValue;
-            _transitionClickAttempts = 0;
-            // Preserve _bossDeathPos across re-entry (loot is still there)
-            Status = _isReentry ? "Re-entering Moment of Trauma" : "Entered Moment of Trauma";
-            ctx.Log($"[Fear] Zone entered (reentry={_isReentry})");
+
+            _lastLootScan = DateTime.MinValue;
+
+            // Do NOT clear _bossDeathPos here.
+            // This allows the loot position to survive re-entry.
+
+            Status = _isReentry
+                ? "Re-entering Searing Exarch"
+                : "Entered Searing Exarch";
+
+            ctx.Log(
+                $"[Fear] Searing Exarch zone entered " +
+                $"(reentry={_isReentry})");
         }
+
+        // ─────────────────────────────────────────────
+        // Main Tick
+        // ─────────────────────────────────────────────
 
         public BossEncounterResult Tick(BotContext ctx)
         {
             var gc = ctx.Game;
-            if (gc?.Player == null) return BossEncounterResult.InProgress;
 
-            var playerGrid = new Vector2(gc.Player.GridPosNum.X, gc.Player.GridPosNum.Y);
+            if (gc?.Player == null)
+                return BossEncounterResult.InProgress;
+
+            var playerGrid = new Vector2(
+                gc.Player.GridPosNum.X,
+                gc.Player.GridPosNum.Y);
+
             ctx.Exploration.Update(playerGrid);
 
+            // Find the Exarch.
             _bossEntity = FindBoss(gc);
-            if (_bossEntity != null && _bossEntity.IsAlive)
-                _bossWasAlive = true;
 
-            // Read boss state machine
-            if (_bossEntity != null && _bossEntity.TryGetComponent<StateMachine>(out var sm) && sm?.States != null)
+            // Remember that the boss has been seen alive.
+            if (_bossEntity != null &&
+                _bossEntity.IsAlive)
             {
-                foreach (var s in sm.States)
-                {
-                    if (s.Name == "boss_life_bar" && s.Value > 0 && !_bossVulnerable)
-                    {
-                        _bossVulnerable = true;
-                        ctx.Log("[Fear] Boss vulnerable! (boss_life_bar=1)");
-                    }
-                    if (s.Name == "emerge" && s.Value > 0 && !_bossEmerged)
-                    {
-                        _bossEmerged = true;
-                        ctx.Log("[Fear] Boss emerged — flasks active");
-                    }
-                }
+                _bossWasAlive = true;
             }
 
-            // Flask suppression — clear at emerge (2.4s before vulnerable)
-            ctx.Combat.BossInvulnerable = _bossEntity != null && _bossEntity.IsAlive && !_bossEmerged;
+            // ─────────────────────────────────────────
+            // Kill detection
+            // ─────────────────────────────────────────
 
-            // Kill detection → WaitingForLoot (NOT Complete — we loot first)
-            if (_bossWasAlive && _phase != FearPhase.WaitingForLoot
-                && (_bossEntity == null || !_bossEntity.IsAlive))
+            if (_bossWasAlive &&
+                _phase != FearPhase.WaitingForLoot &&
+                (_bossEntity == null ||
+                 !_bossEntity.IsAlive))
             {
-                // Cache death position for loot navigation
-                if (!_bossDeathPos.HasValue && _bossEntity != null)
-                    _bossDeathPos = _bossEntity.GridPosNum;
-                else if (!_bossDeathPos.HasValue)
-                    _bossDeathPos = new Vector2(206, 306); // fallback to spawn pos
+                // Save final boss position if available.
+                if (!_bossDeathPos.HasValue &&
+                    _bossEntity != null)
+                {
+                    _bossDeathPos =
+                        _bossEntity.GridPosNum;
+                }
+
+                // If the entity disappeared before we could get
+                // its position, use the player's current position.
+                if (!_bossDeathPos.HasValue)
+                {
+                    _bossDeathPos = playerGrid;
+                }
 
                 _phase = FearPhase.WaitingForLoot;
+
                 _phaseStartTime = DateTime.Now;
+
                 _lastLootScan = DateTime.MinValue;
-                ctx.Log($"[Fear] Kill detected — looting at ({_bossDeathPos.Value.X:F0},{_bossDeathPos.Value.Y:F0})");
+
+                ctx.Log(
+                    $"[Fear] Searing Exarch killed — " +
+                    $"looting at " +
+                    $"({_bossDeathPos.Value.X:F0}," +
+                    $"{_bossDeathPos.Value.Y:F0})");
             }
+
+            // ─────────────────────────────────────────
+            // State machine
+            // ─────────────────────────────────────────
 
             switch (_phase)
             {
                 case FearPhase.Approaching:
-                    return TickApproaching(ctx, gc, playerGrid);
-                case FearPhase.WaitForVulnerable:
-                    return TickWaitForVulnerable(ctx, gc, playerGrid);
+                    return TickApproaching(
+                        ctx,
+                        gc,
+                        playerGrid);
+
                 case FearPhase.Fighting:
-                    return TickFighting(ctx, gc, playerGrid);
+                    return TickFighting(
+                        ctx,
+                        gc,
+                        playerGrid);
+
                 case FearPhase.WaitingForLoot:
-                    return TickWaitingForLoot(ctx, gc, playerGrid);
+                    return TickWaitingForLoot(
+                        ctx,
+                        gc,
+                        playerGrid);
+
                 default:
                     return BossEncounterResult.InProgress;
             }
         }
 
-        private BossEncounterResult TickApproaching(BotContext ctx, GameController gc, Vector2 playerGrid)
+        // ─────────────────────────────────────────────
+        // Approaching
+        // ─────────────────────────────────────────────
+
+        private BossEncounterResult TickApproaching(
+            BotContext ctx,
+            GameController gc,
+            Vector2 playerGrid)
         {
-            if ((DateTime.Now - _phaseStartTime).TotalSeconds > 60)
+            if ((DateTime.Now - _phaseStartTime)
+                .TotalSeconds > 90)
             {
-                Status = "Timeout: couldn't reach boss";
+                Status =
+                    "Timeout: couldn't reach Exarch";
+
+                ctx.Log(
+                    "[Fear] Exarch approach timeout");
+
                 return BossEncounterResult.Failed;
             }
 
-            // ── Re-entry path: need to click area transition to get past force field ──
-            if (_isReentry)
+            // If the boss is already nearby, immediately switch
+            // to combat.
+            if (_bossEntity != null &&
+                _bossEntity.IsAlive)
             {
-                // If boss is already dead (we killed it with DoT as we died), go straight to loot
-                if (_bossWasAlive && (_bossEntity == null || !_bossEntity.IsAlive))
-                    return BossEncounterResult.InProgress; // kill detection above handles transition
+                var bossDistance =
+                    Vector2.Distance(
+                        playerGrid,
+                        _bossEntity.GridPosNum);
 
-                return TickReentryApproach(ctx, gc, playerGrid);
-            }
-
-            // ── First entry: walk to DPS position ──
-            var dpsPos = GetDpsPosition(ctx.Settings);
-            var distToDps = Vector2.Distance(playerGrid, dpsPos);
-            if (distToDps > 10)
-            {
-                if (!ctx.Navigation.IsNavigating)
-                    ctx.Navigation.NavigateTo(gc, dpsPos);
-                Status = $"Moving to DPS position ({distToDps:F0}g)";
-                return BossEncounterResult.InProgress;
-            }
-
-            // At DPS position — transition to pre-lay phase when boss is visible
-            if (_bossEntity != null && _bossEntity.IsAlive)
-            {
-                _phase = FearPhase.WaitForVulnerable;
-                _phaseStartTime = DateTime.Now;
-                ctx.Log("[Fear] At DPS position — pre-laying traps");
-            }
-            else
-            {
-                Status = "At DPS position — waiting for boss";
-            }
-            return BossEncounterResult.InProgress;
-        }
-
-        private BossEncounterResult TickReentryApproach(BotContext ctx, GameController gc, Vector2 playerGrid)
-        {
-            // Find the area transition
-            Entity? transition = null;
-            foreach (var entity in gc.EntityListWrapper.OnlyValidEntities)
-            {
-                if (entity.Type != EntityType.AreaTransition) continue;
-                if (entity.Path?.Contains("AreaTransition") != true) continue;
-                transition = entity;
-                break;
-            }
-
-            if (transition == null)
-            {
-                // No transition found — we might already be in the boss room (past the door)
-                if (_bossEntity != null && _bossEntity.IsAlive && _bossEntity.DistancePlayer < 60)
+                if (bossDistance < 100)
                 {
-                    _phase = FearPhase.Fighting;
-                    _phaseStartTime = DateTime.Now;
-                    _bossVulnerable = true;
-                    _bossEmerged = true;
-                    ctx.Log("[Fear] Re-entry — already in boss room, fighting");
+                    _phase =
+                        FearPhase.Fighting;
+
+                    _phaseStartTime =
+                        DateTime.Now;
+
+                    ctx.Log(
+                        "[Fear] Searing Exarch found — fighting");
+
                     return BossEncounterResult.InProgress;
                 }
-                Status = "Re-entry — looking for area transition";
-                return BossEncounterResult.InProgress;
             }
 
-            // Transition exists — navigate to approach position NORTH of it
-            var distToApproach = Vector2.Distance(playerGrid, TransitionApproachPos);
+            // Keep using the existing FearDpsPosition setting.
+            var dpsPos =
+                GetDpsPosition(ctx.Settings);
 
-            if (!transition.IsTargetable)
+            // If a valid position is configured, navigate there.
+            //
+            // We deliberately don't navigate to (0,0) when the
+            // setting is missing.
+            if (dpsPos != Vector2.Zero)
             {
-                // Too close / too far south — back up north
-                if (playerGrid.Y > 150)
+                var distToDps =
+                    Vector2.Distance(
+                        playerGrid,
+                        dpsPos);
+
+                if (distToDps > 10)
                 {
                     if (!ctx.Navigation.IsNavigating)
-                        ctx.Navigation.NavigateTo(gc, TransitionApproachPos);
-                    Status = "Backing up — transition not targetable";
+                    {
+                        ctx.Navigation.NavigateTo(
+                            gc,
+                            dpsPos);
+                    }
+
+                    Status =
+                        $"Moving to Exarch DPS position " +
+                        $"({distToDps:F0}g)";
+
                     return BossEncounterResult.InProgress;
                 }
-                // At north position but still not targetable — wait
-                Status = "Waiting for transition to become targetable";
-                return BossEncounterResult.InProgress;
             }
 
-            // Transition is targetable — click it
-            if (distToApproach > 15)
-            {
-                if (!ctx.Navigation.IsNavigating)
-                    ctx.Navigation.NavigateTo(gc, TransitionApproachPos);
-                Status = $"Moving to transition ({distToApproach:F0}g)";
-                return BossEncounterResult.InProgress;
-            }
-
-            // In position, click the transition
-            if ((DateTime.Now - _lastTransitionClickTime).TotalMilliseconds > 1500)
-            {
-                if (!ctx.Interaction.IsBusy)
-                {
-                    ctx.Interaction.InteractWithEntity(transition, ctx.Navigation, requireProximity: true);
-                    _lastTransitionClickTime = DateTime.Now;
-                    _transitionClickAttempts++;
-                    ctx.Log($"[Fear] Clicking area transition (attempt {_transitionClickAttempts})");
-                }
-                Status = $"Clicking transition (attempt {_transitionClickAttempts})";
-            }
-            else
-            {
-                Status = "Waiting to retry transition click";
-            }
-
-            // After successful transition, bot will be in boss room — detect via position jump
-            // or boss becoming close. The area doesn't change so OnEnterZone won't fire again.
-            if (_bossEntity != null && _bossEntity.DistancePlayer < 80)
-            {
-                _phase = FearPhase.Fighting;
-                _phaseStartTime = DateTime.Now;
-                _bossVulnerable = true;
-                _bossEmerged = true;
-                ctx.Log("[Fear] Through transition — fighting");
-            }
+            Status = _isReentry
+                ? "Re-entry — looking for Exarch"
+                : "Looking for Exarch";
 
             return BossEncounterResult.InProgress;
         }
 
-        private BossEncounterResult TickWaitForVulnerable(BotContext ctx, GameController gc, Vector2 playerGrid)
+        // ─────────────────────────────────────────────
+        // Fighting
+        // ─────────────────────────────────────────────
+
+        private BossEncounterResult TickFighting(
+            BotContext ctx,
+            GameController gc,
+            Vector2 playerGrid)
         {
-            if (_bossVulnerable)
+            // Give Exarch a generous timeout because the encounter
+            // contains several mechanics/phases.
+            if ((DateTime.Now - _phaseStartTime)
+                .TotalSeconds > 600)
             {
-                _phase = FearPhase.Fighting;
-                _phaseStartTime = DateTime.Now;
-                if (_bossEntity != null)
-                {
-                    var toBoss = _bossEntity.GridPosNum - playerGrid;
-                    _orbitAngle = MathF.Atan2(toBoss.Y, toBoss.X) + MathF.PI;
-                }
-                _lastOrbitBlink = DateTime.Now;
-                ctx.Log("[Fear] Boss vulnerable — orbiting with frostblink!");
-                return BossEncounterResult.InProgress;
-            }
+                Status =
+                    "Fight timeout (10min)";
 
-            var dpsPos2 = GetDpsPosition(ctx.Settings);
-            var distToDps = Vector2.Distance(playerGrid, dpsPos2);
-            if (distToDps > 15 && !ctx.Navigation.IsNavigating)
-                ctx.Navigation.NavigateTo(gc, dpsPos2);
+                ctx.Log(
+                    "[Fear] Exarch fight timeout");
 
-            var elapsed = (DateTime.Now - _phaseStartTime).TotalSeconds;
-            Status = _bossEmerged
-                ? $"Emerged — flasks active! ({elapsed:F1}s)"
-                : $"Pre-laying traps ({elapsed:F1}s)";
-
-            if (elapsed > 12)
-            {
-                _phase = FearPhase.Fighting;
-                _phaseStartTime = DateTime.Now;
-                ctx.Log("[Fear] Invuln timeout — forcing fight");
-            }
-
-            return BossEncounterResult.InProgress;
-        }
-
-        private BossEncounterResult TickFighting(BotContext ctx, GameController gc, Vector2 playerGrid)
-        {
-            if ((DateTime.Now - _phaseStartTime).TotalSeconds > 300)
-            {
-                Status = "Fight timeout (5min)";
                 return BossEncounterResult.Failed;
             }
 
-            if (_bossEntity == null || !_bossEntity.IsAlive)
+            // Boss can disappear temporarily during mechanics.
+            // Do NOT treat that as a death.
+            if (_bossEntity == null)
             {
-                Status = "Boss not visible — waiting";
+                Status =
+                    "Exarch not currently visible";
+
                 return BossEncounterResult.InProgress;
             }
 
-            // Cache boss position continuously (for death pos)
-            _bossDeathPos = _bossEntity.GridPosNum;
-
-            var bossGrid = _bossEntity.GridPosNum;
-            var distToBoss = Vector2.Distance(playerGrid, bossGrid);
-
-            // Frostblink orbit
-            if ((DateTime.Now - _lastOrbitBlink).TotalMilliseconds >= OrbitBlinkIntervalMs)
+            if (!_bossEntity.IsAlive)
             {
-                var blinkSkill = FindReadyMovementSkill(ctx);
-                if (blinkSkill != null)
-                {
-                    _orbitAngle += MathF.PI / 2f;
-                    var orbitTarget = bossGrid + new Vector2(
-                        MathF.Cos(_orbitAngle) * OrbitRadius,
-                        MathF.Sin(_orbitAngle) * OrbitRadius);
+                Status =
+                    "Exarch death detected";
 
-                    var screenPos = Systems.Pathfinding.GridToScreen(gc, orbitTarget);
-                    var windowRect = gc.Window.GetWindowRectangle();
-
-                    if (screenPos.X > 0 && screenPos.X < windowRect.Width &&
-                        screenPos.Y > 0 && screenPos.Y < windowRect.Height)
-                    {
-                        var absPos = new Vector2(windowRect.X + screenPos.X, windowRect.Y + screenPos.Y);
-                        BotInput.ForceCursorPressKey(absPos, blinkSkill.Key);
-                        blinkSkill.LastUsedAt = DateTime.Now;
-                        _lastOrbitBlink = DateTime.Now;
-                    }
-                }
+                return BossEncounterResult.InProgress;
             }
 
-            var currentOrbitPos = bossGrid + new Vector2(
-                MathF.Cos(_orbitAngle) * OrbitRadius,
-                MathF.Sin(_orbitAngle) * OrbitRadius);
+            // Continuously cache the boss position.
+            _bossDeathPos =
+                _bossEntity.GridPosNum;
 
-            if (Vector2.Distance(playerGrid, currentOrbitPos) > 10 && !ctx.Navigation.IsNavigating)
-                ctx.Navigation.NavigateTo(gc, currentOrbitPos);
+            var bossGrid =
+                _bossEntity.GridPosNum;
 
-            var hp = _bossEntity.GetComponent<Life>();
-            var hpPct = hp != null ? (hp.CurHP * 100 / Math.Max(1, hp.MaxHP)) : 0;
-            Status = $"Orbiting + DPS — Boss HP:{hpPct}% dist={distToBoss:F0}g";
+            var distToBoss =
+                Vector2.Distance(
+                    playerGrid,
+                    bossGrid);
+
+            // We don't implement any Exarch-specific combat logic here.
+            // Your existing Combat system handles the actual fight.
+            //
+            // Only recover if the player somehow gets very far away.
+            if (distToBoss > 100 &&
+                !ctx.Navigation.IsNavigating)
+            {
+                ctx.Navigation.NavigateTo(
+                    gc,
+                    bossGrid);
+
+                Status =
+                    $"Moving toward Exarch " +
+                    $"({distToBoss:F0}g)";
+
+                return BossEncounterResult.InProgress;
+            }
+
+            // Read boss HP for status display.
+            var hp =
+                _bossEntity.GetComponent<Life>();
+
+            var hpPct = 0;
+
+            if (hp != null)
+            {
+                hpPct =
+                    hp.CurHP * 100 /
+                    Math.Max(1, hp.MaxHP);
+            }
+
+            Status =
+                $"Fighting Exarch — " +
+                $"HP:{hpPct}% " +
+                $"dist={distToBoss:F0}g";
+
             return BossEncounterResult.InProgress;
         }
 
-        private BossEncounterResult TickWaitingForLoot(BotContext ctx, GameController gc, Vector2 playerGrid)
+        // ─────────────────────────────────────────────
+        // Loot
+        // ─────────────────────────────────────────────
+
+        private BossEncounterResult TickWaitingForLoot(
+            BotContext ctx,
+            GameController gc,
+            Vector2 playerGrid)
         {
-            var timeout = ctx.Settings.Run.LootSweepTimeoutSeconds.Value;
-            var elapsed = (DateTime.Now - _phaseStartTime).TotalSeconds;
+            var timeout =
+                ctx.Settings.Run
+                    .LootSweepTimeoutSeconds.Value;
+
+            var elapsed =
+                (DateTime.Now - _phaseStartTime)
+                    .TotalSeconds;
 
             if (elapsed > timeout)
             {
-                Status = "Loot sweep done";
-                ctx.Log("[Fear] Loot sweep timeout — signaling Complete");
+                Status =
+                    "Loot sweep done";
+
+                ctx.Log(
+                    "[Fear] Exarch loot sweep timeout — " +
+                    "signaling Complete");
+
                 return BossEncounterResult.Complete;
             }
 
-            var remaining = timeout - elapsed;
-            var countdown = $"({remaining:F0}s left)";
+            var remaining =
+                timeout - elapsed;
 
+            var countdown =
+                $"({remaining:F0}s left)";
+
+            // ─────────────────────────────────────────
             // Navigate to boss death position
-            var lootPos = _bossDeathPos ?? new Vector2(206, 306);
-            var distToLoot = Vector2.Distance(playerGrid, lootPos);
-            if (distToLoot > 15 && !ctx.Navigation.IsNavigating)
-                ctx.Navigation.NavigateTo(gc, lootPos);
+            // ─────────────────────────────────────────
 
-            // Scan for loot
-            if ((DateTime.Now - _lastLootScan).TotalMilliseconds >= 500)
+            var lootPos =
+                _bossDeathPos ?? playerGrid;
+
+            var distToLoot =
+                Vector2.Distance(
+                    playerGrid,
+                    lootPos);
+
+            if (distToLoot > 15 &&
+                !ctx.Navigation.IsNavigating)
             {
-                ctx.Loot.Scan(gc);
-                _lastLootScan = DateTime.Now;
+                ctx.Navigation.NavigateTo(
+                    gc,
+                    lootPos);
             }
 
-            // Pick up items
+            // ─────────────────────────────────────────
+            // Scan for loot
+            // ─────────────────────────────────────────
+
+            if ((DateTime.Now - _lastLootScan)
+                .TotalMilliseconds >= 500)
+            {
+                ctx.Loot.Scan(gc);
+
+                _lastLootScan =
+                    DateTime.Now;
+            }
+
+            // ─────────────────────────────────────────
+            // Interaction busy
+            // ─────────────────────────────────────────
+
             if (ctx.Interaction.IsBusy)
             {
-                Status = $"Picking up loot {countdown}";
+                Status =
+                    $"Picking up loot {countdown}";
+
                 return BossEncounterResult.InProgress;
             }
 
+            // ─────────────────────────────────────────
+            // Pick up loot
+            // ─────────────────────────────────────────
+
             if (ctx.Loot.HasLootNearby)
             {
-                var (_, candidate) = ctx.Loot.PickupNext(ctx.Interaction, ctx.Navigation);
+                var (_, candidate) =
+                    ctx.Loot.PickupNext(
+                        ctx.Interaction,
+                        ctx.Navigation);
+
                 if (candidate != null)
                 {
-                    Status = $"Looting: {candidate.ItemName} {countdown}";
+                    Status =
+                        $"Looting: " +
+                        $"{candidate.ItemName} " +
+                        countdown;
+
                     return BossEncounterResult.InProgress;
                 }
             }
 
-            // Label toggle if needed
-            if (ctx.Loot.TogglePhase != LootSystem.LabelTogglePhase.Idle)
+            // ─────────────────────────────────────────
+            // Label toggle
+            // ─────────────────────────────────────────
+
+            if (ctx.Loot.TogglePhase !=
+                LootSystem.LabelTogglePhase.Idle)
             {
                 ctx.Loot.TickLabelToggle(gc);
-                Status = $"Label toggle {countdown}";
+
+                Status =
+                    $"Label toggle {countdown}";
+
                 return BossEncounterResult.InProgress;
             }
+
             if (ctx.Loot.ShouldToggleLabels(gc))
             {
                 ctx.Loot.StartLabelToggle(gc);
+
                 return BossEncounterResult.InProgress;
             }
 
-            Status = $"Waiting for loot at boss position {countdown}";
+            Status =
+                $"Waiting for loot at Exarch position " +
+                countdown;
+
             return BossEncounterResult.InProgress;
         }
 
-        private MovementSkillInfo? FindReadyMovementSkill(BotContext ctx)
-        {
-            foreach (var ms in ctx.Navigation.MovementSkills)
-            {
-                if (!ms.IsReady) continue;
-                if (ms.MinCastIntervalMs > 0 &&
-                    (DateTime.Now - ms.LastUsedAt).TotalMilliseconds < ms.MinCastIntervalMs)
-                    continue;
-                return ms;
-            }
-            return null;
-        }
+        // ─────────────────────────────────────────────
+        // Find Boss
+        // ─────────────────────────────────────────────
 
         private Entity? FindBoss(GameController gc)
         {
             try
             {
-                foreach (var entity in gc.EntityListWrapper.ValidEntitiesByType[EntityType.Monster])
+                foreach (var entity in
+                    gc.EntityListWrapper
+                        .ValidEntitiesByType[
+                            EntityType.Monster])
                 {
-                    if (!entity.IsHostile) continue;
-                    if (entity.Rarity != MonsterRarity.Unique) continue;
-                    if (entity.Path?.Contains(BossPath) != true) continue;
+                    if (!entity.IsHostile)
+                        continue;
+
+                    if (entity.Rarity !=
+                        MonsterRarity.Unique)
+                        continue;
+
+                    if (entity.Path?.Contains(
+                            BossPath,
+                            StringComparison.OrdinalIgnoreCase)
+                        != true)
+                        continue;
+
                     return entity;
                 }
             }
-            catch (IndexOutOfRangeException) { }
+            catch (IndexOutOfRangeException)
+            {
+            }
+
             return null;
         }
+
+        // ─────────────────────────────────────────────
+        // Render
+        // ─────────────────────────────────────────────
 
         public void Render(BotContext ctx)
         {
             var gc = ctx.Game;
             var g = ctx.Graphics;
-            if (gc?.Player == null || g == null) return;
 
-            var cam = gc.IngameState.Camera;
+            if (gc?.Player == null ||
+                g == null)
+                return;
+
+            var cam =
+                gc.IngameState.Camera;
+
+            // ─────────────────────────────────────────
+            // Boss marker
+            // ─────────────────────────────────────────
 
             if (_bossEntity != null)
             {
-                var screen = cam.WorldToScreen(_bossEntity.BoundsCenterPosNum);
-                if (screen.X > -200 && screen.X < 2400)
+                var screen =
+                    cam.WorldToScreen(
+                        _bossEntity.BoundsCenterPosNum);
+
+                if (screen.X > -200 &&
+                    screen.X < 2400)
                 {
-                    var color = _bossEntity.IsAlive
-                        ? (_bossVulnerable ? SharpDX.Color.Red : SharpDX.Color.Yellow)
-                        : SharpDX.Color.LimeGreen;
-                    var label = _bossVulnerable ? "FEAR BOSS (DPS!)" :
-                        _bossEmerged ? "FEAR BOSS (flasks!)" :
-                        _bossEntity.IsAlive ? "FEAR BOSS (invuln)" : "FEAR BOSS (dead)";
-                    g.DrawText(label, screen + new Vector2(-40, -30), color);
+                    var color =
+                        _bossEntity.IsAlive
+                            ? SharpDX.Color.Red
+                            : SharpDX.Color.LimeGreen;
+
+                    var label =
+                        _bossEntity.IsAlive
+                            ? "SEARING EXARCH"
+                            : "EXARCH DEAD";
+
+                    g.DrawText(
+                        label,
+                        screen +
+                            new Vector2(-50, -30),
+                        color);
                 }
             }
 
+            // ─────────────────────────────────────────
             // Loot position marker
-            if (_phase == FearPhase.WaitingForLoot && _bossDeathPos.HasValue)
+            // ─────────────────────────────────────────
+
+            if (_phase ==
+                    FearPhase.WaitingForLoot &&
+                _bossDeathPos.HasValue)
             {
-                var world = new Vector3(_bossDeathPos.Value.X * 10.88f, _bossDeathPos.Value.Y * 10.88f, 0);
-                var screen = cam.WorldToScreen(world);
-                if (screen.X > 0 && screen.X < 2400)
-                    g.DrawText("LOOT HERE", screen + new Vector2(-30, -20), SharpDX.Color.Gold);
+                var world =
+                    new Vector3(
+                        _bossDeathPos.Value.X * 10.88f,
+                        _bossDeathPos.Value.Y * 10.88f,
+                        0);
+
+                var screen =
+                    cam.WorldToScreen(world);
+
+                if (screen.X > 0 &&
+                    screen.X < 2400)
+                {
+                    g.DrawText(
+                        "LOOT HERE",
+                        screen +
+                            new Vector2(-30, -20),
+                        SharpDX.Color.Gold);
+                }
             }
 
-            float hudX = 20, hudY = 250, lineH = 18;
-            var phaseColor = _phase switch
-            {
-                FearPhase.WaitForVulnerable => SharpDX.Color.Yellow,
-                FearPhase.Fighting => SharpDX.Color.Red,
-                FearPhase.WaitingForLoot => SharpDX.Color.Gold,
-                _ => SharpDX.Color.White,
-            };
-            g.DrawText($"Fear: {_phase}", new Vector2(hudX, hudY), phaseColor);
+            // ─────────────────────────────────────────
+            // HUD
+            // ─────────────────────────────────────────
+
+            float hudX = 20;
+            float hudY = 250;
+            float lineH = 18;
+
+            var phaseColor =
+                _phase switch
+                {
+                    FearPhase.Fighting =>
+                        SharpDX.Color.Red,
+
+                    FearPhase.WaitingForLoot =>
+                        SharpDX.Color.Gold,
+
+                    _ =>
+                        SharpDX.Color.White
+                };
+
+            g.DrawText(
+                $"Fear: {_phase}",
+                new Vector2(hudX, hudY),
+                phaseColor);
+
             hudY += lineH;
-            g.DrawText(Status, new Vector2(hudX, hudY), SharpDX.Color.Gray);
+
+            g.DrawText(
+                Status,
+                new Vector2(hudX, hudY),
+                SharpDX.Color.Gray);
         }
+
+        // ─────────────────────────────────────────────
+        // Reset
+        // ─────────────────────────────────────────────
 
         public void Reset()
         {
-            _phase = FearPhase.Idle;
+            _phase =
+                FearPhase.Idle;
+
             _bossEntity = null;
+
             _bossWasAlive = false;
-            _bossVulnerable = false;
-            _bossEmerged = false;
+
             _isReentry = false;
+
             _bossDeathPos = null;
-            _orbitAngle = 0;
-            _lastOrbitBlink = DateTime.MinValue;
-            _lastTransitionClickTime = DateTime.MinValue;
-            _transitionClickAttempts = 0;
+
+            _lastLootScan =
+                DateTime.MinValue;
+
             Status = "";
         }
     }
