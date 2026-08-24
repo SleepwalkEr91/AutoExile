@@ -221,7 +221,7 @@ namespace AutoExile
             _mechanics.Register(new RitualMechanic());
 
             // Read in-game keybindings (skill slots, flasks)
-            _combat.RefreshKeybindings(GameController);
+            _combat.RefreshKeybindings(GameController, force: true);
 
             // Populate boss type dropdown — save/restore value since SetListValues resets it
             var savedBossType = Settings.Boss.BossType.Value;
@@ -446,7 +446,7 @@ namespace AutoExile
                 _threatMap.RebuildFromEntities(_entityCache.Monsters);
             }
             _combat.ClearUnreachable();
-            _combat.RefreshKeybindings(GameController);
+            _combat.RefreshKeybindings(GameController, force: true);
             _altarHandler.Reset();
             _lootTracker.OnAreaChanged();
             ClearMinimapIcons();
@@ -584,13 +584,17 @@ namespace AutoExile
             else
                 BotInput.TickMovementLayer();      // Auto-resume movement after discrete actions
 
-            // Sync primary movement key from skill config → NavigationSystem + CombatSystem
-            var primaryMove = Settings.Build.GetPrimaryMovement();
-            _navigation.MoveKey = primaryMove?.Key.Value ?? Keys.None;
-
             // Ensure skill bar is always up to date — NavigationSystem needs MovementSkills
             // for dash-for-speed even when combat is disabled by the active mode
+            // Pick up keybind changes made in the game's options without needing an area change
+            // or a plugin reload. Self-throttled to KeybindRefreshMs.
+            _combat.RefreshKeybindings(GameController);
             _combat.RefreshSkillBar(GameController, Settings.Build);
+
+            // Sync primary movement key from skill config → NavigationSystem. Taken from
+            // CombatSystem (after the refresh above) rather than straight off the config, so a
+            // slot pinned to a bar position uses the key the game currently has bound there.
+            _navigation.MoveKey = _combat.PrimaryMoveKey ?? Keys.None;
 
             // Sync movement skills (dash/blink) from CombatSystem → NavigationSystem
             _navigation.MovementSkills = _combat.MovementSkills;
@@ -606,17 +610,9 @@ namespace AutoExile
 
             // F5 — removed (was Mapping mode toggle, caused accidental mode switches)
 
-            // Debug dump hotkey — F6: dumps game state + recording snapshot + tile signatures
-            if (Settings.DumpGameState.PressedOnce())
-            {
-                LogMessage("[AutoExile] Dumping all debug data...");
-                TriggerGameStateDump();
-                _recorder.ForceDump("hotkey");
-                LogMessage($"[AutoExile] Recording: {_recorder.LastDumpStatus}");
-                if (_tileSignatures.Count == 0)
-                    ScanTileSignatures();
-                LogMessage($"[AutoExile] Tile signatures: {_tileSignatures.Count}");
-            }
+            // F6 debug dump hotkey moved to Render() — Tick() returns early when the game window
+            // isn't in the foreground (IsForeGroundCache), which made the hotkey fire only
+            // sporadically. Same reasoning as the running-toggle hotkey.
 
             // Gameplay recorder hotkey — F9 (toggle on/off, works for both human and bot play)
             if (Settings.RecordGameplay.PressedOnce())
@@ -1110,6 +1106,19 @@ namespace AutoExile
                 }
                 else if (_lootTracker.IsActive)
                     _lootTracker.StopSession();
+            }
+
+            // Debug dump hotkey — F6: game state + recording snapshot + tile signatures + keybinds.
+            // Lives here rather than in Tick() so an unfocused game window can't swallow it.
+            if (Settings.DumpGameState.PressedOnce())
+            {
+                LogMessage("[AutoExile] Dumping all debug data...");
+                TriggerGameStateDump();
+                _recorder.ForceDump("hotkey");
+                LogMessage($"[AutoExile] Recording: {_recorder.LastDumpStatus}");
+                if (_tileSignatures.Count == 0)
+                    ScanTileSignatures();
+                LogMessage($"[AutoExile] Tile signatures: {_tileSignatures.Count}");
             }
 
             if (Settings.FinishAndStopHotkey.PressedOnce())
@@ -1730,6 +1739,10 @@ namespace AutoExile
         {
             var snapshot = new GameStateSnapshot();
 
+            // In-game keybindings vs. what the combat system resolved. Goes into the dump JSON
+            // (not just the log) so it can be read back without digging through ExileCore's log.
+            snapshot.Keybinds = _combat.DumpKeybindDiagnostics(gc);
+
             // Capture entities — only those within 2x network bubble (includes stale cached ones)
             foreach (var entity in gc.EntityListWrapper.OnlyValidEntities)
             {
@@ -2092,10 +2105,13 @@ namespace AutoExile
 
             // Flame Link key comes from the configured Minion-role skill slot.
             var linkKey = System.Windows.Forms.Keys.None;
-            foreach (var slot in Settings.Build.AllSkillSlots)
+            var linkSlots = Settings.Build.AllSkillSlots;
+            for (int barPos = 0; barPos < linkSlots.Length; barPos++)
             {
-                if (slot.Role.Value == "Minion" && slot.Key.Value != System.Windows.Forms.Keys.None)
-                { linkKey = slot.Key.Value; break; }
+                if (linkSlots[barPos].Role.Value != "Minion") continue;
+                var slotKey = _combat.KeyForSlot(barPos);
+                if (slotKey != System.Windows.Forms.Keys.None)
+                { linkKey = slotKey; break; }
             }
             if (linkKey == System.Windows.Forms.Keys.None) return;
 

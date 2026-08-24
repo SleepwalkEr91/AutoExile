@@ -233,6 +233,29 @@ namespace AutoExile.Systems
         private readonly Keys[] _slotKeys = new Keys[8];
         private bool _keybindsLoaded;
 
+        /// <summary>
+        /// Index of the first skill-slot entry in IngameState.ShortcutSettings.Shortcuts.
+        /// Flask1-5 sit at 0-4, the eight skill slots are assumed to start here. If a game patch
+        /// ever shifts this list, the plausibility check in RefreshKeybindings() catches it and
+        /// the F6 keybind dump shows the real layout so this constant can be corrected.
+        /// </summary>
+        private const int SkillShortcutBase = 7;
+
+        /// <summary>
+        /// Keybindings are re-read on this interval so rebinding a skill in the game's options
+        /// takes effect without an area change or a plugin reload. Reading ~13 shortcut entries
+        /// is cheap; this deliberately does NOT piggyback on the 500ms skill bar refresh so the
+        /// two can be tuned separately.
+        /// </summary>
+        private DateTime _lastKeybindReadAt = DateTime.MinValue;
+        private const float KeybindRefreshMs = 1000f;
+
+        /// <summary>
+        /// Human-readable outcome of the last RefreshKeybindings() call. Shown in the F6 keybind
+        /// dump so a bad read is visible instead of silently falling back to defaults.
+        /// </summary>
+        public string KeybindReadStatus { get; private set; } = "not read yet";
+
         // ═══════════════════════════════════════════════════
         // Public API
         // ═══════════════════════════════════════════════════
@@ -349,7 +372,6 @@ namespace AutoExile.Systems
             _primaryMovementEntry = null;
             PrimaryMoveKey = null;
             _movementSkillEntries.Clear();
-            PrimaryMoveKey = null;
             MovementSkills.Clear();
             _lastSkillBarReadAt = DateTime.MinValue;
             _lastCastByKey.Clear();
@@ -814,12 +836,21 @@ namespace AutoExile.Systems
 
             _skillBar.Clear();
             _primaryMovementEntry = null;
+            // Must be cleared too: the PrimaryMovement branch below bails out when this is
+            // already set, so leaving it would freeze the move key at whatever it was the first
+            // time this ran — rebinding the move slot in-game would never reach BotInput.
+            // Only Reset() used to clear it, i.e. effectively never during a session.
+            PrimaryMoveKey = null;
             _movementSkillEntries.Clear();
 
-            // Iterate user-configured slots (key-based, not slot-index-based)
-            foreach (var slotConfig in settings.AllSkillSlots)
+            // Slot index IS the bar position (see BuildSettings.AllSkillSlots). The key to press
+            // and the skill sitting there both come from the game, never from the settings.
+            var slots = settings.AllSkillSlots;
+            for (int barPos = 0; barPos < slots.Length; barPos++)
             {
-                var key = slotConfig.Key.Value;
+                var slotConfig = slots[barPos];
+
+                var key = KeyForSlot(barPos);
                 if (key == Keys.None) continue;
 
                 if (!Enum.TryParse<SkillRole>(slotConfig.Role.Value, out var role))
@@ -852,16 +883,9 @@ namespace AutoExile.Systems
                     var barIds = gc.IngameState?.ServerData?.SkillBarIds;
                     if (barIds != null)
                     {
-                        // Find the bar position for this key
-                        int targetBarPos = -1;
-                        for (int bi = 0; bi < 8 && bi < barIds.Count; bi++)
+                        if (barPos < barIds.Count)
                         {
-                            if (KeyForSlot(bi) == key) { targetBarPos = bi; break; }
-                        }
-
-                        if (targetBarPos >= 0 && targetBarPos < barIds.Count)
-                        {
-                            var targetId = barIds[targetBarPos];
+                            var targetId = barIds[barPos];
                             if (targetId != 0)
                             {
                                 foreach (var skill in actor.ActorSkills)
@@ -876,20 +900,9 @@ namespace AutoExile.Systems
                         }
                     }
 
-                    // Fallback: match by ActorSkill.SkillSlotIndex (legacy)
-                    if (matchedSkill == null)
-                    {
-                        foreach (var skill in actor.ActorSkills)
-                        {
-                            if (!skill.IsOnSkillBar) continue;
-                            if (skill.InternalName != null && skill.Name != null)
-                            {
-                                // Try direct key name match as last resort
-                                var slotKey = KeyForSlot(skill.SkillSlotIndex);
-                                if (slotKey == key) { matchedSkill = skill; break; }
-                            }
-                        }
-                    }
+                    // No legacy fallback on ActorSkill.SkillSlotIndex: a skill placed on two bar
+                    // positions reports only the first one there, so it can't identify a position.
+                    // SkillBarIds is the authority.
                 }
 
                 // Skip slots where no actual skill is equipped in-game
@@ -984,17 +997,19 @@ namespace AutoExile.Systems
         /// Returns Keys.None for unknown/unmapped slots.
         /// </summary>
         /// <summary>
-        /// Default key for a POE skill bar position.
-        /// Bar positions come from ServerData.SkillBarIds array indices:
-        /// 0=LMB, 1=RMB, 2=MMB, 3=Q, 4=W, 5=E, 6=R, 7=T
-        /// Note: ActorSkill.SkillSlotIndex uses a DIFFERENT numbering
-        /// (even indices for keyboard slots). This method maps bar positions.
+        /// Default key for a POE skill bar position, used only while the in-game keybindings
+        /// can't be read (see RefreshKeybindings). Bar positions come from the
+        /// ServerData.SkillBarIds array indices: 0=LMB, 1=MMB, 2=RMB, 3=Q, 4=W, 5=E, 6=R, 7=T.
+        /// Note the mouse order: the game's second bar slot is the MIDDLE mouse button, not the
+        /// right one — verified against a live ShortcutSettings dump where slot 1 held the
+        /// rebound middle-mouse key and slot 2 held RMB. This used to read 1=RMB, 2=MMB, which
+        /// produced a duplicate RButton on the bar whenever slot 1 fell back to its default.
         /// </summary>
         public static Keys DefaultKeyForSlot(int barPosition) => barPosition switch
         {
             0 => Keys.LButton,     // LMB
-            1 => Keys.RButton,     // RMB
-            2 => Keys.MButton,     // Middle mouse
+            1 => Keys.MButton,     // Middle mouse
+            2 => Keys.RButton,     // RMB
             3 => Keys.Q,
             4 => Keys.W,
             5 => Keys.E,
@@ -1016,93 +1031,189 @@ namespace AutoExile.Systems
 
         /// <summary>
         /// Read actual keybindings from IngameState.ShortcutSettings.Shortcuts.
-        /// Call on startup and area change.
+        /// Safe to call every tick — throttled to KeybindRefreshMs unless force is set.
         /// </summary>
-        public void RefreshKeybindings(GameController gc)
+        public void RefreshKeybindings(GameController gc, bool force = false)
         {
+            if (!force && (DateTime.Now - _lastKeybindReadAt).TotalMilliseconds < KeybindRefreshMs)
+                return;
+            _lastKeybindReadAt = DateTime.Now;
+
             try
             {
                 var shortcuts = gc.IngameState?.ShortcutSettings?.Shortcuts;
-                if (shortcuts == null || shortcuts.Count < 15) return;
-
-                // Skill slots: Shortcuts indices 7-14 map to Skill1-Skill8
-                // Bar positions 0-7 correspond to Skill1-Skill8
-                // Shortcuts index = bar position + 7
-                for (int bar = 0; bar < 8; bar++)
+                if (shortcuts == null)
                 {
-                    var shortcut = shortcuts[bar + 7];
-                    var consoleKey = shortcut.MainKey;
-                    _slotKeys[bar] = ConsoleKeyToKeys(consoleKey, bar);
+                    KeybindReadStatus = "ShortcutSettings.Shortcuts is null — using defaults";
+                    return;
                 }
+                if (shortcuts.Count < SkillShortcutBase + 8)
+                {
+                    KeybindReadStatus = $"only {shortcuts.Count} shortcut entries, need {SkillShortcutBase + 8} — using defaults";
+                    return;
+                }
+
+                // Skill slots: bar positions 0-7 (LMB, RMB, mouse slot 3, then the five keyboard
+                // slots) map to Shortcuts[SkillShortcutBase + bar].
+                var slots = new Keys[8];
+                for (int bar = 0; bar < 8; bar++)
+                    slots[bar] = ConsoleKeyToKeys(shortcuts[bar + SkillShortcutBase].MainKey);
+
+                // Sanity check before we trust the read. The game can't bind two skill slots to
+                // the same key, so duplicates mean we're reading the wrong entries (e.g. the
+                // shortcut list shifted in a patch) — keep the defaults rather than pressing wrong
+                // keys, and record why. Run the F6 dump to see the real layout.
+                if (!AreSlotKeysPlausible(slots, out var why))
+                {
+                    KeybindReadStatus = $"implausible read ({why}): [{string.Join(", ", slots)}] — using defaults";
+                    _keybindsLoaded = false;
+                    return;
+                }
+
+                Array.Copy(slots, _slotKeys, slots.Length);
 
                 // Flask keys: Shortcuts indices 0-4 = Flask1-Flask5
                 for (int f = 0; f < 5; f++)
                 {
-                    var shortcut = shortcuts[f];
-                    var mapped = ConsoleKeyToKeys(shortcut.MainKey, -1);
-                    if (mapped != Keys.None)
-                        FlaskKeys[f] = mapped;
+                    var mapped = ConsoleKeyToKeys(shortcuts[f].MainKey);
+                    FlaskKeys[f] = mapped != Keys.None ? mapped : DefaultFlaskKeys[f];
                 }
 
                 _keybindsLoaded = true;
+                KeybindReadStatus = $"ok — slots [{string.Join(", ", _slotKeys)}], flasks [{string.Join(", ", FlaskKeys)}]";
             }
-            catch
+            catch (Exception ex)
             {
                 // Fall back to defaults if anything fails
+                KeybindReadStatus = $"read failed ({ex.Message}) — using defaults";
             }
         }
 
         /// <summary>
-        /// Convert System.ConsoleKey to System.Windows.Forms.Keys.
-        /// For mouse buttons (bar positions 0-2), use special mapping since
-        /// ConsoleKey uses raw values 1/2/4 for LMB/RMB/MMB.
+        /// A believable set of skill-slot keys: at least one slot bound, and no key used twice
+        /// (the game doesn't allow that). Catches a wrong SkillShortcutBase instead of letting it
+        /// through as silently wrong key presses.
         /// </summary>
-        private static Keys ConsoleKeyToKeys(ConsoleKey consoleKey, int barPosition)
+        private static bool AreSlotKeysPlausible(Keys[] slots, out string reason)
         {
-            // Mouse button slots (bar positions 0-2)
-            if (barPosition >= 0 && barPosition <= 2)
+            var seen = new HashSet<Keys>();
+            int bound = 0;
+
+            foreach (var key in slots)
             {
-                return (int)consoleKey switch
+                if (key == Keys.None) continue;
+                bound++;
+                if (!seen.Add(key))
                 {
-                    1 => Keys.LButton,   // LMB
-                    2 => Keys.RButton,   // RMB
-                    4 => Keys.MButton,   // MMB
-                    _ => Keys.None
-                };
+                    reason = $"{key} appears on more than one slot";
+                    return false;
+                }
             }
 
-            // ConsoleKey and Keys share the same underlying values for most keys
-            var intVal = (int)consoleKey;
-
-            // Quick validation — ConsoleKey values map to Keys for common ranges
-            if (intVal >= 48 && intVal <= 57) return (Keys)intVal;   // D0-D9
-            if (intVal >= 65 && intVal <= 90) return (Keys)intVal;   // A-Z
-            if (intVal >= 112 && intVal <= 123) return (Keys)intVal; // F1-F12
-
-            // Named keys with matching values
-            return consoleKey switch
+            if (bound == 0)
             {
-                ConsoleKey.Spacebar => Keys.Space,
-                ConsoleKey.Tab => Keys.Tab,
-                ConsoleKey.Enter => Keys.Enter,
-                ConsoleKey.Escape => Keys.Escape,
-                ConsoleKey.Insert => Keys.Insert,
-                ConsoleKey.Delete => Keys.Delete,
-                ConsoleKey.Home => Keys.Home,
-                ConsoleKey.End => Keys.End,
-                ConsoleKey.PageUp => Keys.PageUp,
-                ConsoleKey.PageDown => Keys.PageDown,
-                ConsoleKey.UpArrow => Keys.Up,
-                ConsoleKey.DownArrow => Keys.Down,
-                ConsoleKey.LeftArrow => Keys.Left,
-                ConsoleKey.RightArrow => Keys.Right,
-                ConsoleKey.Backspace => Keys.Back,
-                ConsoleKey.OemComma => Keys.Oemcomma,
-                ConsoleKey.OemPeriod => Keys.OemPeriod,
-                ConsoleKey.OemMinus => Keys.OemMinus,
-                ConsoleKey.OemPlus => Keys.Oemplus,
-                _ => (Keys)intVal // Direct cast as fallback — values match for most keys
-            };
+                reason = "no slot has a key bound";
+                return false;
+            }
+
+            reason = "";
+            return true;
+        }
+
+        /// <summary>
+        /// Convert the game's ConsoleKey-typed keybinding value to System.Windows.Forms.Keys.
+        /// Both enums are laid out on Windows virtual-key codes — ConsoleKey.Spacebar == 32 ==
+        /// VK_SPACE == Keys.Space, and mouse buttons arrive as VK_LBUTTON/RBUTTON/MBUTTON = 1/2/4
+        /// == Keys.LButton/RButton/MButton — so one cast covers keyboard and mouse alike.
+        /// The previous version took the bar position as a second argument and accepted ONLY 1/2/4
+        /// on bar positions 0-2: rebinding one of the three mouse slots to a keyboard key (e.g.
+        /// Space on the middle-mouse slot) came back as Keys.None and silently fell back to the
+        /// default mouse button, which is the bug this replaces.
+        /// </summary>
+        private static Keys ConsoleKeyToKeys(ConsoleKey consoleKey)
+        {
+            var vk = (int)consoleKey;
+            if (vk <= 0 || vk > 254) return Keys.None;
+
+            var key = (Keys)vk;
+            return Enum.IsDefined(typeof(Keys), key) ? key : Keys.None;
+        }
+
+        /// <summary>
+        /// One-shot diagnostic for the F6 dump: the raw shortcut list, the skill bar, and what we
+        /// made of them. Use this when the keys AutoExile presses don't match the in-game bar.
+        /// </summary>
+        public List<string> DumpKeybindDiagnostics(GameController gc)
+        {
+            var lines = new List<string>();
+            try
+            {
+                lines.Add($"read status: {KeybindReadStatus}");
+                lines.Add($"keybindsLoaded={_keybindsLoaded}, SkillShortcutBase={SkillShortcutBase}");
+
+                var inUse = new List<string>();
+                for (int bar = 0; bar < 8; bar++)
+                    inUse.Add($"{bar}={KeyForSlot(bar)}");
+                lines.Add($"slot keys in use: {string.Join(", ", inUse)}");
+                lines.Add($"flask keys in use: {string.Join(", ", FlaskKeys)}");
+
+                var shortcuts = gc.IngameState?.ShortcutSettings?.Shortcuts;
+                if (shortcuts == null)
+                {
+                    lines.Add("ShortcutSettings.Shortcuts: null");
+                }
+                else
+                {
+                    lines.Add($"ShortcutSettings.Shortcuts: {shortcuts.Count} entries");
+                    for (int i = 0; i < shortcuts.Count; i++)
+                    {
+                        var main = shortcuts[i].MainKey;
+                        var marker = i >= SkillShortcutBase && i < SkillShortcutBase + 8
+                            ? $" <- assumed bar position {i - SkillShortcutBase}"
+                            : i < 5 ? $" <- assumed flask {i + 1}" : "";
+                        lines.Add($"  [{i}] raw={(int)main} ConsoleKey={main} -> Keys={ConsoleKeyToKeys(main)}{marker}");
+                    }
+                }
+
+                lines.Add($"PrimaryMoveKey={(PrimaryMoveKey.HasValue ? PrimaryMoveKey.Value.ToString() : "none")}");
+                var moveList = new List<string>();
+                foreach (var ms in MovementSkills)
+                    moveList.Add($"{ms.Key}{(ms.CanCrossTerrain ? "(cross)" : "")}");
+                lines.Add($"movement skills: {(moveList.Count > 0 ? string.Join(", ", moveList) : "none")}");
+                lines.Add($"combat skills: {_skillBar.Count}");
+
+                var barIds = gc.IngameState?.ServerData?.SkillBarIds;
+                if (barIds == null)
+                {
+                    lines.Add("ServerData.SkillBarIds: null");
+                }
+                else
+                {
+                    var ids = new List<string>();
+                    for (int i = 0; i < barIds.Count; i++)
+                        ids.Add($"[{i}]={barIds[i]}");
+                    lines.Add($"ServerData.SkillBarIds ({barIds.Count}): {string.Join(" ", ids)}");
+                }
+
+                var actor = gc.Player?.GetComponent<Actor>();
+                if (actor?.ActorSkills == null)
+                {
+                    lines.Add("Actor.ActorSkills: null");
+                }
+                else
+                {
+                    foreach (var skill in actor.ActorSkills)
+                    {
+                        if (!skill.IsOnSkillBar) continue;
+                        lines.Add($"  skill id={skill.Id} slotIndex={skill.SkillSlotIndex} name='{skill.Name}' internal='{skill.InternalName}'");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                lines.Add($"dump failed: {ex.Message}");
+            }
+            return lines;
         }
 
         // ═══════════════════════════════════════════════════

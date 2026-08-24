@@ -123,24 +123,27 @@ namespace AutoExile.Modes.BossEncounters
                     ctx.Settings.Build.BlinkRange.Value);
             }
 
-            // Resolve skill keys from build settings
-            var moveSkills = ctx.Settings.Build.GetMovementSkills();
-            var blinkSkill = moveSkills.FirstOrDefault(s => s.CanCrossTerrain.Value);
+            // Resolve skill keys. CombatSystem already resolved every slot against the live
+            // skill bar, so take the keys from there rather than re-deriving them here.
+            var blinkSkill = ctx.Combat.MovementSkills.FirstOrDefault(m => m.CanCrossTerrain);
             if (blinkSkill != null)
-                _blinkKey = blinkSkill.Key.Value;
+                _blinkKey = blinkSkill.Key;
 
             // Build stairs skill list: all Enemy-role skills, sorted by priority (highest first)
             // Respects MinCastInterval so debuffs fire first on cooldown, then damage spam fills in
             _stairsSkills.Clear();
-            var sorted = ctx.Settings.Build.AllSkillSlots
-                .Where(s => s.Key.Value != Keys.None && s.Role.Value == "Enemy")
-                .OrderByDescending(s => s.Priority.Value);
-            foreach (var slot in sorted)
+            var slots = ctx.Settings.Build.AllSkillSlots;
+            var sorted = Enumerable.Range(0, slots.Length)
+                .Where(i => slots[i].Role.Value == "Enemy")
+                .OrderByDescending(i => slots[i].Priority.Value);
+            foreach (var barPos in sorted)
             {
+                var slotKey = ctx.Combat.KeyForSlot(barPos);
+                if (slotKey == Keys.None) continue;
                 _stairsSkills.Add(new StairsCastEntry
                 {
-                    Key = slot.Key.Value,
-                    MinIntervalMs = slot.MinCastIntervalMs.Value,
+                    Key = slotKey,
+                    MinIntervalMs = slots[barPos].MinCastIntervalMs.Value,
                     LastCastAt = DateTime.MinValue,
                 });
             }

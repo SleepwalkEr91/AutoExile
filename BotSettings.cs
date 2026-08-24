@@ -156,46 +156,26 @@ namespace AutoExile
             public RangeNode<int> PathMergeThreshold { get; set; } = new RangeNode<int>(8, 0, 20);
 
             // ── Skill Slots ──
-            // Configure each skill on your bar: what key it's bound to, what role it plays,
-            // and its priority (higher = checked first during combat).
-            // One slot should be PrimaryMovement (your Move Only key).
-            // Movement skills (dash/blink) use the MovementSkill role.
+            // Each slot IS a position on the in-game skill bar, in bar order:
+            //   Skill1 = left mouse, Skill2 = middle mouse, Skill3 = right mouse,
+            //   Skill4-Skill8 = the five keyboard slots.
+            // Nothing about the keys is stored here. Which key to press comes from the game's own
+            // keybindings (CombatSystem.KeyForSlot) and which skill sits there from
+            // ServerData.SkillBarIds, both re-read continuously — so rebinding a skill in POE's
+            // options needs no change in these settings. Only BEHAVIOUR is configured per slot:
+            // role, priority and the firing conditions.
 
-            public SkillSlotConfig Skill1 { get; set; } = new SkillSlotConfig(Keys.T, SkillRole.Enemy);
-            public SkillSlotConfig Skill2 { get; set; } = new SkillSlotConfig(Keys.Q);
-            public SkillSlotConfig Skill3 { get; set; } = new SkillSlotConfig(Keys.W);
-            public SkillSlotConfig Skill4 { get; set; } = new SkillSlotConfig(Keys.E);
-            public SkillSlotConfig Skill5 { get; set; } = new SkillSlotConfig(Keys.R);
-            public SkillSlotConfig Skill6 { get; set; } = new SkillSlotConfig(Keys.None);
-            public SkillSlotConfig Skill7 { get; set; } = new SkillSlotConfig(Keys.None);
-            public SkillSlotConfig Skill8 { get; set; } = new SkillSlotConfig(Keys.None);
+            public SkillSlotConfig Skill1 { get; set; } = new SkillSlotConfig();  // left mouse
+            public SkillSlotConfig Skill2 { get; set; } = new SkillSlotConfig();  // middle mouse
+            public SkillSlotConfig Skill3 { get; set; } = new SkillSlotConfig();  // right mouse
+            public SkillSlotConfig Skill4 { get; set; } = new SkillSlotConfig();  // keyboard slot 1
+            public SkillSlotConfig Skill5 { get; set; } = new SkillSlotConfig();  // keyboard slot 2
+            public SkillSlotConfig Skill6 { get; set; } = new SkillSlotConfig();  // keyboard slot 3
+            public SkillSlotConfig Skill7 { get; set; } = new SkillSlotConfig();  // keyboard slot 4
+            public SkillSlotConfig Skill8 { get; set; } = new SkillSlotConfig();  // keyboard slot 5
 
-            /// <summary>All configured skill slots.</summary>
-            public IEnumerable<SkillSlotConfig> AllSkillSlots => new[] { Skill1, Skill2, Skill3, Skill4, Skill5, Skill6, Skill7, Skill8 };
-
-            /// <summary>Find the first skill slot with PrimaryMovement role, or null.</summary>
-            public SkillSlotConfig? GetPrimaryMovement()
-            {
-                foreach (var slot in AllSkillSlots)
-                {
-                    if (slot.Key.Value != Keys.None && slot.Role.Value == SkillRole.PrimaryMovement.ToString())
-                        return slot;
-                }
-                return null;
-            }
-
-            /// <summary>Find all movement skills (dash/blink), ordered by priority.</summary>
-            public List<SkillSlotConfig> GetMovementSkills()
-            {
-                var result = new List<SkillSlotConfig>();
-                foreach (var slot in AllSkillSlots)
-                {
-                    if (slot.Key.Value != Keys.None && slot.Role.Value == SkillRole.MovementSkill.ToString())
-                        result.Add(slot);
-                }
-                result.Sort((a, b) => b.Priority.Value.CompareTo(a.Priority.Value));
-                return result;
-            }
+            /// <summary>All skill slots in bar order — the array index IS the bar position (0-7).</summary>
+            public SkillSlotConfig[] AllSkillSlots => new[] { Skill1, Skill2, Skill3, Skill4, Skill5, Skill6, Skill7, Skill8 };
 
             // ── Combat Behavior ──
 
@@ -274,19 +254,16 @@ namespace AutoExile
         [Submenu(CollapsedByDefault = true)]
         public class SkillSlotConfig
         {
-            public SkillSlotConfig() : this(Keys.None) { }
+            // Explicit parameterless ctor: the settings deserializer needs one.
+            public SkillSlotConfig() : this(SkillRole.Disabled) { }
 
-            public SkillSlotConfig(Keys defaultKey, SkillRole defaultRole = SkillRole.Disabled)
+            public SkillSlotConfig(SkillRole defaultRole)
             {
-                Key = new HotkeyNode(defaultKey);
                 Role.SetListValues(Enum.GetNames<SkillRole>().ToList());
                 Role.Value = defaultRole.ToString();
                 TargetFilter.SetListValues(Enum.GetNames<SkillTargetFilter>().ToList());
                 TargetFilter.Value = SkillTargetFilter.Any.ToString();
             }
-
-            [Menu("Key", "Keyboard key bound to this skill slot in-game.")]
-            public HotkeyNode Key { get; set; } = new HotkeyNode(Keys.None);
 
             [Menu("Role", "Where to aim: Enemy (at target), Corpse (at corpse), Self (no cursor). PrimaryMovement/MovementSkill for navigation.")]
             public ListNode Role { get; set; } = new ListNode();

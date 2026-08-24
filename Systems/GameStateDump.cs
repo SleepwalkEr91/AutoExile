@@ -17,6 +17,8 @@ namespace AutoExile.Systems
         public ModeSnapshot? Mode { get; set; }
         public InteractionSnapshot? Interaction { get; set; }
         public LootSnapshot? Loot { get; set; }
+        /// <summary>Keybind diagnostics (CombatSystem.DumpKeybindDiagnostics), one line per entry.</summary>
+        public List<string>? Keybinds { get; set; }
     }
 
     public class EntitySnapshot
@@ -714,6 +716,9 @@ namespace AutoExile.Systems
                         }).ToList(),
                     };
                 }
+
+                if (snapshot.Keybinds != null && snapshot.Keybinds.Count > 0)
+                    data["keybinds"] = snapshot.Keybinds;
             }
 
             var options = new JsonSerializerOptions { WriteIndented = true };

@@ -1543,22 +1543,10 @@ function addFieldsTo(parent, fieldDefs) {
 
 let detectedSkillBar = []; // populated from WebSocket
 
-function findConfigSlotForKey(keyName) {
-  // Find which build.skill{N} has this key
-  for (let i = 1; i <= 8; i++) {
-    const ke = S[`build.skill${i}.key`];
-    if (ke && ke.value === keyName) return i;
-  }
-  // Auto-assign: find the first unused slot and assign this key to it
-  for (let i = 1; i <= 8; i++) {
-    const ke = S[`build.skill${i}.key`];
-    if (ke && ke.value === 'None') {
-      updateSetting(`build.skill${i}.key`, keyName);
-      ke.value = keyName;
-      return i;
-    }
-  }
-  return null;
+// A config slot IS a bar position: bar index 0 is build.skill1 ... index 7 is build.skill8.
+// Nothing to match, nothing to assign — see BuildSettings.AllSkillSlots.
+function configSlotForBarPosition(slotIndex) {
+  return (slotIndex >= 0 && slotIndex < 8) ? slotIndex + 1 : null;
 }
 
 function renderSkillsSection() {
@@ -1567,7 +1555,7 @@ function renderSkillsSection() {
 
   if (detectedSkillBar.length > 0) {
     for (const detected of detectedSkillBar) {
-      const configIdx = findConfigSlotForKey(detected.key);
+      const configIdx = configSlotForBarPosition(detected.slotIndex);
       const prefix = configIdx ? `build.skill${configIdx}` : null;
 
       // Determine type: from existing config, or auto-detect
@@ -1604,7 +1592,7 @@ function renderSkillsSection() {
         renderSkillFields(fieldsContainer, prefix, skillType, configIdx);
         body.appendChild(fieldsContainer);
       } else {
-        body.innerHTML = `<div style="padding:8px;color:var(--text-dim);font-size:13px">No config slot has key "${esc(detected.key)}". Assign key "${esc(detected.key)}" to one of the Skill 1-6 slots to configure.</div>`;
+        body.innerHTML = `<div style="padding:8px;color:var(--text-dim);font-size:13px">Bar position ${detected.slotIndex} is outside the eight configurable slots.</div>`;
       }
 
       slot.appendChild(header); slot.appendChild(body); wrap.appendChild(slot);
@@ -2705,8 +2693,11 @@ updateDashboard = function(s) {
 
   // Update detected skill bar — re-render skills section if data changes
   if (s.skillBar && s.skillBar.length > 0) {
-    const newKeys = s.skillBar.map(d => d.slotIndex+':'+d.skillName).join(',');
-    const oldKeys = detectedSkillBar.map(d => d.slotIndex+':'+d.skillName).join(',');
+    // Include the key: rebinding a slot in-game changes only d.key, and without it here the
+    // section would keep showing the old key until the skill itself changed.
+    const sig = d => d.slotIndex+':'+d.key+':'+d.skillName;
+    const newKeys = s.skillBar.map(sig).join(',');
+    const oldKeys = detectedSkillBar.map(sig).join(',');
     if (newKeys !== oldKeys) {
       detectedSkillBar = s.skillBar;
       if (settingsLoaded && activeSettingsTab === 'build') renderAllSettings();
