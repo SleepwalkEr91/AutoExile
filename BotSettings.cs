@@ -526,6 +526,9 @@ namespace AutoExile
 
             [Menu("Follower Name(s)", "Character name(s) of the follower, comma-separated — any one of them being present is enough. Leave empty to accept any other living player in the area.")]
             public TextNode FollowerNames { get; set; } = new TextNode("");
+
+            [Menu("Follower Max Distance", "The follower only counts as present while within this distance (grid units). Stops the leader from starting a wave while the follower is still somewhere else on the map.")]
+            public RangeNode<float> FollowerMaxDistance { get; set; } = new RangeNode<float>(80f, 20f, 300f);
         }
 
         [Submenu(CollapsedByDefault = true)]
