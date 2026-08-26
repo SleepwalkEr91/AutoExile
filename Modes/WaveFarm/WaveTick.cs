@@ -47,6 +47,13 @@ namespace AutoExile.Modes.WaveFarm
         // Repath throttle — prevents rapid stop/start of movement key
         private DateTime _lastExplorePath = DateTime.MinValue;
 
+        /// <summary>
+        /// Follower leash, handed in by WaveFarmMode. Exploration is what drags the leader away
+        /// from the follower — combat and looting stay local — so the leash is applied to the
+        /// Explore action only. Null when the mode never set it.
+        /// </summary>
+        public FollowerGate? Follower { get; set; }
+
         // Failed explore targets — positions where NavigateTo failed (unreachable).
         // Prevents the bot from repeatedly pathing to the same unreachable position
         // (e.g., stale monsters from wish zones, entities across walls).
@@ -737,6 +744,21 @@ namespace AutoExile.Modes.WaveFarm
             switch (action.Type)
             {
                 case WaveActionType.Explore:
+                    // Follower leash — hold position instead of exploring on while the follower
+                    // is out of range. Deliberately only here: combat, loot and mechanics have
+                    // already been decided above and stay local, so they keep running. Also keep
+                    // the ClearPlan's stall timer alive, otherwise a wait longer than its 45s
+                    // budget would make it abandon every region we still owe.
+                    if (Follower != null && ctx.Settings.Farming.WaitForFollower.Value
+                        && !Follower.IsInRange(ctx))
+                    {
+                        if (ctx.Navigation.IsNavigating)
+                            ctx.Navigation.Stop(gc);
+                        _clearPlan.MarkExternalWait();
+                        Status = $"Waiting for follower — {Follower.WaitReason(ctx)}";
+                        return false;
+                    }
+
                     // Navigate to exploration target — only repath if target changed significantly
                     // AND enough time has passed. Frequent repaths cause movement key spam
                     // (stop+start each time) which can trigger anti-cheat disconnects.

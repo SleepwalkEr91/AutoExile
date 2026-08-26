@@ -18,6 +18,13 @@ namespace AutoExile.Modes.WaveFarm
         public string Name => "Wave Farming";
 
         private readonly WaveTick _wave = new();
+
+        // ── Follower gate (Settings.Farming.WaitForFollower) ──
+        // Entry gate: hold at the portal until the follower is in range. Cleared once that
+        // happened, so a follower dying mid-map doesn't strand the leader at the entrance —
+        // from then on the leash inside WaveTick handles keeping them together.
+        private readonly FollowerGate _followerGate = new();
+        private bool _followerGateCleared;
         private readonly HideoutFlow _hideoutFlow = new();
         private readonly ZoneStateCache _zoneCache = new();
         private readonly Dictionary<string, IFarmPlan> _plans = new();
@@ -540,6 +547,8 @@ namespace AutoExile.Modes.WaveFarm
             _phase = WaveFarmPhase.InMap;
             _mapCompleted = false;
             _portalKeyPressed = false;
+            _followerGateCleared = false;
+            _wave.Follower = _followerGate;
 
             _wave.Initialize(_activePlan!);
             _activePlan!.Reset();
@@ -579,6 +588,21 @@ namespace AutoExile.Modes.WaveFarm
             ctx.Interaction.DangerZones.Clear();
             if (_isInSubZone && _exitPortalGridPos.HasValue)
                 ctx.Interaction.DangerZones.Add(_exitPortalGridPos.Value);
+
+            // Follower entry gate — stay at the entrance until the follower has arrived and is
+            // close enough, before any clearing starts. Cleared once it has been in range; from
+            // then on WaveTick's exploration leash keeps the two together.
+            if (!_followerGateCleared)
+            {
+                if (ctx.Settings.Farming.WaitForFollower.Value && !_followerGate.IsInRange(ctx))
+                {
+                    if (ctx.Navigation.IsNavigating)
+                        ctx.Navigation.Stop(ctx.Game);
+                    Status = $"Waiting for follower — {_followerGate.WaitReason(ctx)}";
+                    return;
+                }
+                _followerGateCleared = true;
+            }
 
             // Update exploration
             var playerPos = ctx.Game.Player.GridPosNum;

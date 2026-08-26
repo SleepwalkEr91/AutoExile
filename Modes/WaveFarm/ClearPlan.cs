@@ -201,6 +201,17 @@ namespace AutoExile.Modes.WaveFarm
             Status = "unreachable observer — reselecting";
         }
 
+        /// <summary>
+        /// Hold off the global stall timer while something outside the plan is deliberately
+        /// keeping us still (currently: waiting for the follower to catch up). Without this a
+        /// wait longer than PlanStallSeconds would make the plan abandon every pending region.
+        /// </summary>
+        public void MarkExternalWait()
+        {
+            if (_initialized)
+                _planLastProgress = DateTime.Now;
+        }
+
         public void Reset()
         {
             _regions.Clear();

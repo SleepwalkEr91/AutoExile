@@ -1290,7 +1290,11 @@ function renderModeTab(container, modeName) {
   // Mode-specific settings
   for (const section of cfg.sections) {
     if (section === 'farming') {
-      addSection(container, 'Farming', [['farming.mapName'],['farming.farmStrategy']]);
+      addSection(container, 'Farming', [['farming.mapName'],['farming.farmStrategy'],
+        ['farming.waitForFollower']]);
+      addSection(container, 'Follower Gate (shared)', [
+        {key:'followerGate.followerNames', showIf:'farming.waitForFollower'},
+        {key:'followerGate.followerMaxDistance', showIf:'farming.waitForFollower'}]);
       addSection(container, 'Map Rolling (shared)', [['mapRolling.minMapTier'],
         ['mapRolling.dangerousMapMods'],['mapRolling.minMapQuantity']]);
       addSection(container, 'Map Device Slots (shared)', [['mapDevice.slot1'],['mapDevice.slot2'],

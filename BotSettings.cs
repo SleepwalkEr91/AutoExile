@@ -432,6 +432,9 @@ namespace AutoExile
             [Menu("Min Coverage", "Minimum map exploration % before clearing is considered done. Higher = more thorough clear.")]
             public RangeNode<float> MinCoverage { get; set; } = new RangeNode<float>(0.85f, 0f, 1f);
 
+            [Menu("Wait For Follower", "After entering the map, wait until a living follower is in range before starting to clear. While clearing, pause exploration whenever the follower falls behind (combat and looting continue). Who counts as the follower is configured in the shared Follower Gate settings.")]
+            public ToggleNode WaitForFollower { get; set; } = new ToggleNode(false);
+
             // ── Atlas setup (pre-populated by strategy defaults, user can override) ──
 
             [Menu("Witness Type", "Which endgame witness to use. Strategies pre-populate this but you can override.")]
