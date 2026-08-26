@@ -33,6 +33,13 @@ namespace AutoExile.Modes
         private readonly HideoutFlow _hideoutFlow = new();
         private readonly LootPickupTracker _lootTracker = new();
 
+        // ── Follower gate (Settings.Boss.WaitForFollower) ──
+        // Only blocks until the follower has been in range ONCE per boss zone. Gating the whole
+        // encounter would leave the leader standing still mid-fight if the follower dies, which
+        // is worse than fighting on alone.
+        private readonly FollowerGate _followerGate = new();
+        private bool _followerGateCleared;
+
         // ── Run state ──
         private bool _mapCompleted;
         private string _lastAreaName = "";
@@ -129,6 +136,7 @@ namespace AutoExile.Modes
                 // Already in a map — assume boss zone
                 _activeEncounter.OnEnterZone(ctx);
                 _phase = BossPhase.InBossZone;
+                _followerGateCleared = false;
                 ModeHelpers.EnableDefaultCombat(ctx);
             }
 
@@ -333,6 +341,22 @@ namespace AutoExile.Modes
         private void TickBossZone(BotContext ctx)
         {
             if (_activeEncounter == null) return;
+
+            // Follower gate — after entering the zone, hold still until the follower has arrived
+            // and is close enough, so the encounter never starts without it. Cleared once it has
+            // been in range, so a follower dying mid-fight doesn't freeze the leader.
+            // _phaseStartTime keeps running on purpose, so existing timeouts still apply.
+            if (!_followerGateCleared)
+            {
+                if (ctx.Settings.Boss.WaitForFollower.Value && !_followerGate.IsInRange(ctx))
+                {
+                    if (ctx.Navigation.IsNavigating)
+                        ctx.Navigation.Stop(ctx.Game);
+                    Status = $"Waiting for follower — {_followerGate.WaitReason(ctx)}";
+                    return;
+                }
+                _followerGateCleared = true;
+            }
 
             // Update exploration
             var playerGrid = new Vector2(ctx.Game.Player.GridPosNum.X, ctx.Game.Player.GridPosNum.Y);
@@ -699,6 +723,7 @@ namespace AutoExile.Modes
                 _activeEncounter?.OnEnterZone(ctx);
                 _phase = BossPhase.InBossZone;
                 _phaseStartTime = DateTime.Now;
+                _followerGateCleared = false;
                 _portalKeyPressed = false;
                 ModeHelpers.EnableDefaultCombat(ctx);
                 ctx.Loot.ClearFailed();

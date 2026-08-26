@@ -83,22 +83,9 @@ namespace AutoExile.Modes
         private const float CloseUniqueCombatLockDistance = 22f;
         private const float CloseUniquePenaltyResetSeconds = 1.5f;
 
-        // Follower presence gate (Settings.Simulacrum.WaitForFollower) — cached split of the
-        // comma-separated name setting so we don't allocate a string[] on every check.
-        private string _followerNamesRaw = "";
-        private string[] _followerNames = Array.Empty<string>();
-
-        // Scan throttle for the gate. TickFindMonolith() runs the gate on every tick while
-        // exploring, and the scan walks the entity list — so throttle it like the rest of the
-        // per-tick entity work in this project. 200ms is far below any reaction time that
-        // matters here.
-        private DateTime _lastFollowerCheckAt = DateTime.MinValue;
-        private const float FollowerCheckIntervalMs = 200f;
-
-        // Distance of the nearest matching follower at the last scan (null = none found at all).
-        // Both gates read this: the on-the-way gate only needs "is there one", the monolith gate
-        // also compares against FollowerMaxDistance. Also drives the status text.
-        private float? _lastFollowerDistance;
+        // Follower gate (Settings.Simulacrum.WaitForFollower). Detection and distance live in the
+        // shared helper; only the toggle is per-mode.
+        private readonly FollowerGate _followerGate = new();
 
         // Action cooldown
         private const float MajorActionCooldownMs = 500f;
@@ -401,107 +388,6 @@ namespace AutoExile.Modes
         // Map phases
         // =================================================================
 
-        /// <summary>
-        /// Follower gate on the way to the monolith: only asks whether a usable follower is in
-        /// the area at all, deliberately WITHOUT the distance requirement — the leader should walk
-        /// all the way to the monolith and do the waiting there, not stop halfway whenever the
-        /// follower falls behind.
-        /// </summary>
-        private bool IsFollowerInArea(BotContext ctx)
-        {
-            if (!_settings.WaitForFollower.Value) return true;
-            UpdateFollowerDistance(ctx);
-            return _lastFollowerDistance.HasValue;
-        }
-
-        /// <summary>
-        /// Follower gate at the monolith: the follower has to be in the area AND within
-        /// FollowerMaxDistance, otherwise the leader starts the wave alone and dies.
-        /// </summary>
-        private bool IsFollowerInRange(BotContext ctx)
-        {
-            if (!_settings.WaitForFollower.Value) return true;
-            UpdateFollowerDistance(ctx);
-            return _lastFollowerDistance.HasValue
-                && _lastFollowerDistance.Value <= _settings.FollowerMaxDistance.Value;
-        }
-
-        /// <summary>
-        /// Refresh _lastFollowerDistance with the distance to the nearest usable follower, or null
-        /// when there is none. A follower is usable when it's a living player entity other than
-        /// ourselves matching the configured name list (empty list = any other living player).
-        /// Detection mirrors FollowerMode.FindLeader (EntityType.Player + Player.PlayerName);
-        /// a dead follower deliberately does NOT count.
-        /// Throttled to FollowerCheckIntervalMs so the entity scan doesn't run on every tick.
-        /// </summary>
-        private void UpdateFollowerDistance(BotContext ctx)
-        {
-            // Plain time throttle — deliberately NOT ModeHelpers.CanAct(), which also gates on
-            // BotInput.CanAct and would freeze this scan while input is blocked.
-            if ((DateTime.Now - _lastFollowerCheckAt).TotalMilliseconds < FollowerCheckIntervalMs)
-                return;
-            _lastFollowerCheckAt = DateTime.Now;
-
-            var gc = ctx.Game;
-            if (gc?.Player == null) return;
-
-            // Re-split the comma-separated list only when the setting text actually changed.
-            var raw = _settings.FollowerNames.Value ?? "";
-            if (!string.Equals(raw, _followerNamesRaw, StringComparison.Ordinal))
-            {
-                _followerNamesRaw = raw;
-                _followerNames = raw.Split(',',
-                    StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-            }
-
-            var playerPos = gc.Player.GridPosNum;
-            float? nearest = null;
-
-            foreach (var entity in gc.EntityListWrapper.OnlyValidEntities)
-            {
-                if (entity.Type != EntityType.Player) continue;
-                if (entity.Id == gc.Player.Id) continue; // that's us
-                if (!entity.IsAlive) continue;           // a dead follower is no help
-                if (!MatchesFollowerName(entity)) continue;
-
-                var entityPos = new Vector2(entity.GridPosNum.X, entity.GridPosNum.Y);
-                var dist = Vector2.Distance(playerPos, entityPos);
-                if (!nearest.HasValue || dist < nearest.Value)
-                    nearest = dist;
-            }
-
-            _lastFollowerDistance = nearest;
-        }
-
-        /// <summary>
-        /// Name match for the follower gate. An empty name list accepts any player.
-        /// </summary>
-        private bool MatchesFollowerName(Entity entity)
-        {
-            if (_followerNames.Length == 0) return true;
-
-            var name = entity.GetComponent<Player>()?.PlayerName;
-            if (string.IsNullOrEmpty(name)) return false;
-
-            foreach (var candidate in _followerNames)
-            {
-                if (string.Equals(candidate, name, StringComparison.OrdinalIgnoreCase))
-                    return true;
-            }
-            return false;
-        }
-
-        /// <summary>
-        /// Status suffix telling apart "follower isn't here at all" from "follower is here but
-        /// too far away" — the two cases the gate blocks on.
-        /// </summary>
-        private string FollowerWaitReason()
-        {
-            return _lastFollowerDistance.HasValue
-                ? $"follower too far away (dist: {_lastFollowerDistance.Value:F0} > {_settings.FollowerMaxDistance.Value:F0})"
-                : "follower not in area";
-        }
-
         private void TickFindMonolith(BotContext ctx)
         {
             var gc = ctx.Game;
@@ -512,12 +398,12 @@ namespace AutoExile.Modes
             // walks all the way to the monolith and waits there (see the wave gate).
             // _phaseStartTime keeps running on purpose, so the existing FindMonolith timeout
             // below still ends the run if the follower never shows up.
-            if (!IsFollowerInArea(ctx))
+            if (_settings.WaitForFollower.Value && !_followerGate.IsInArea(ctx))
             {
                 if (ctx.Navigation.IsNavigating)
                     ctx.Navigation.Stop(gc);
 
-                StatusText = $"Waiting for follower — {FollowerWaitReason()}";
+                StatusText = $"Waiting for follower — {_followerGate.WaitReason(ctx)}";
 
                 if (elapsed > _settings.WaveTimeoutMinutes.Value * 60)
                 {
@@ -923,12 +809,12 @@ namespace AutoExile.Modes
                 // Follower gate — never activate the monolith without the follower.
                 // Sits AFTER the between-wave timeout tracking above on purpose, so a follower
                 // that never comes back still ends the run via BetweenWaveTimeoutSeconds.
-                if (!IsFollowerInRange(ctx))
+                if (_settings.WaitForFollower.Value && !_followerGate.IsInRange(ctx))
                 {
                     var abortIn = BetweenWaveTimeoutSeconds - betweenWaveElapsed;
                     Decision = "Waiting for follower before starting next wave";
                     IdleNearMonolith(ctx);
-                    StatusText = $"Wave {_state.CurrentWave}/15 — {FollowerWaitReason()} ({abortIn:F0}s until abort)";
+                    StatusText = $"Wave {_state.CurrentWave}/15 — {_followerGate.WaitReason(ctx)} ({abortIn:F0}s until abort)";
                     return;
                 }
 

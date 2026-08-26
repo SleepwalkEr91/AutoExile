@@ -77,9 +77,13 @@ namespace AutoExile
 
         public LootSettings Loot { get; set; } = new LootSettings();
 
-        // --- Follower (mode-specific) ---
+        // --- Follower (mode-specific: this character IS the follower) ---
 
         public FollowerSettings Follower { get; set; } = new FollowerSettings();
+
+        // --- Follower Gate (shared: this character is the LEADER and waits for its follower) ---
+
+        public FollowerGateSettings FollowerGate { get; set; } = new FollowerGateSettings();
 
         // --- Blight (mode-specific) ---
 
@@ -484,6 +488,25 @@ namespace AutoExile
 
             [Menu("Fear DPS Position", "Grid position to stand at during Incarnation of Fear pre-lay phase. Format: X,Y. Use 'Set Current Pos' button to capture. Empty = default (206,320).")]
             public TextNode FearDpsPosition { get; set; } = new TextNode();
+
+            [Menu("Wait For Follower", "After entering the boss zone, wait until a living follower is in range before starting the encounter. Who counts as the follower is configured in the shared Follower Gate settings.")]
+            public ToggleNode WaitForFollower { get; set; } = new ToggleNode(false);
+        }
+
+        /// <summary>
+        /// Shared by every leader-side mode that can wait for a follower (Simulacrum, Boss, ...).
+        /// The per-mode "Wait For Follower" toggle decides whether the gate is used at all; these
+        /// two values describe WHO the follower is and how close it has to be, and are the same
+        /// no matter which mode is running.
+        /// </summary>
+        [Submenu(CollapsedByDefault = true)]
+        public class FollowerGateSettings
+        {
+            [Menu("Follower Name(s)", "Character name(s) of the follower, comma-separated — any one of them being present is enough. Leave empty to accept any other living player in the area.")]
+            public TextNode FollowerNames { get; set; } = new TextNode("");
+
+            [Menu("Follower Max Distance", "The follower only counts as present while within this distance (grid units). Stops the leader from starting a fight while the follower is still somewhere else on the map.")]
+            public RangeNode<float> FollowerMaxDistance { get; set; } = new RangeNode<float>(80f, 20f, 300f);
         }
 
         [Submenu(CollapsedByDefault = true)]
@@ -498,14 +521,8 @@ namespace AutoExile
             [Menu("Simulacrum Stock", "Keep this many full Simulacrums in inventory. Withdraws from the central Fragment tab (Stash settings) to maintain stock between runs.")]
             public RangeNode<int> SimulacrumStock { get; set; } = new RangeNode<int>(5, 1, 20);
 
-            [Menu("Wait For Follower", "Wait until a living follower character is in the area before moving to the monolith, and before activating the monolith for each wave. For builds that don't work without their follower.")]
+            [Menu("Wait For Follower", "Wait until a living follower character is in the area before moving to the monolith, and until it is within range before activating the monolith for each wave. Who counts as the follower is configured in the shared Follower Gate settings.")]
             public ToggleNode WaitForFollower { get; set; } = new ToggleNode(false);
-
-            [Menu("Follower Name(s)", "Character name(s) of the follower, comma-separated — any one of them being present is enough. Leave empty to accept any other living player in the area.")]
-            public TextNode FollowerNames { get; set; } = new TextNode("");
-
-            [Menu("Follower Max Distance", "The follower only counts as present while within this distance (grid units). Stops the leader from starting a wave while the follower is still somewhere else on the map.")]
-            public RangeNode<float> FollowerMaxDistance { get; set; } = new RangeNode<float>(80f, 20f, 300f);
         }
 
         [Submenu(CollapsedByDefault = true)]
