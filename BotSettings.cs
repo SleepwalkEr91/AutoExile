@@ -532,7 +532,9 @@ namespace AutoExile
         public class HeistSettings
         {
             [Menu("Companion Interact Key", "Key to press near doors/chests for companion interaction (default V).")]
-            public System.Windows.Forms.Keys CompanionInteractKey { get; set; } = System.Windows.Forms.Keys.V;
+            // Renamed from CompanionInteractKey (was a raw Keys enum) so existing configs that
+            // still store the old plain-int value don't break HotkeyNode deserialization.
+            public HotkeyNode CompanionInteractHotkey { get; set; } = new HotkeyNode(Keys.V);
 
             [Menu("Alert Threshold %", "Stop opening side chests above this alert level.")]
             public RangeNode<float> AlertThreshold { get; set; } = new RangeNode<float>(70f, 20f, 95f);

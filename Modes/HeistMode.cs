@@ -592,7 +592,7 @@ namespace AutoExile.Modes
                 var retryDelay = _companionClickAttempts == 0 ? 0.5 : 3.0;
                 if (timeSinceClick > retryDelay)
                 {
-                    var sent = BotInput.PressKey(settings.CompanionInteractKey);
+                    var sent = BotInput.PressKey(settings.CompanionInteractHotkey.Value);
                     if (sent)
                     {
                         _lastCompanionClickTime = DateTime.Now;
@@ -685,7 +685,7 @@ namespace AutoExile.Modes
                 var retryDelay = _companionClickAttempts == 0 ? 0.5 : 3.0;
                 if (timeSinceClick > retryDelay)
                 {
-                    var sent = BotInput.PressKey(settings.CompanionInteractKey);
+                    var sent = BotInput.PressKey(settings.CompanionInteractHotkey.Value);
                     if (sent) _lastCompanionClickTime = DateTime.Now;
                     _companionClickAttempts++;
                 }
@@ -935,7 +935,7 @@ namespace AutoExile.Modes
             else if (door.DistancePlayer < 40)
             {
                 // Press V — TickAtDoor will verify it was accepted via heist_locked state
-                var sent = BotInput.PressKey(ctx.Settings.Heist.CompanionInteractKey);
+                var sent = BotInput.PressKey(ctx.Settings.Heist.CompanionInteractHotkey.Value);
                 if (sent)
                     _lastCompanionClickTime = DateTime.Now;
                 // If not sent (input gate blocked), _lastCompanionClickTime stays at MinValue
@@ -961,7 +961,7 @@ namespace AutoExile.Modes
             var heistLocked = HeistState.GetStateValue(sm, "heist_locked");
             if (heistLocked > 0 && chest.DistancePlayer < 40)
             {
-                var sent = BotInput.PressKey(ctx.Settings.Heist.CompanionInteractKey);
+                var sent = BotInput.PressKey(ctx.Settings.Heist.CompanionInteractHotkey.Value);
                 if (sent)
                     _lastCompanionClickTime = DateTime.Now;
             }
