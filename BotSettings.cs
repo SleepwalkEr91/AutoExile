@@ -526,6 +526,9 @@ namespace AutoExile
 
             [Menu("Wait For Follower", "Wait until a living follower character is in the area before moving to the monolith, and until it is within range before activating the monolith for each wave. Who counts as the follower is configured in the shared Follower Gate settings.")]
             public ToggleNode WaitForFollower { get; set; } = new ToggleNode(false);
+
+            [Menu("Hold On Close Unique", "During a wave, stop exploring and hold position while a unique monster (boss) is within close range, instead of chasing other monsters. Good for builds that tank bosses in place; turn off for builds that need to keep moving. With Combat Strafe enabled the character still strafes around the boss. Blacklisted enemies never trigger this.")]
+            public ToggleNode HoldOnCloseUnique { get; set; } = new ToggleNode(true);
         }
 
         [Submenu(CollapsedByDefault = true)]
