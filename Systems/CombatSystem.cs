@@ -299,6 +299,11 @@ namespace AutoExile.Systems
             // Scan threats (use entity cache when available for pre-filtered monster list)
             ScanThreats(gc, settings, ctx.Entities);
 
+            // Publish aggressive pathing intent before skill execution. Otherwise a
+            // build that casts every tick returns before positioning and never moves
+            // toward the densest visible pack.
+            UpdateAggressiveMovementIntent(gc.Player.GridPosNum, settings.CombatStrafe.Value);
+
             // Check if active channel should be released (target died, conditions changed, etc.)
             ReleaseChannelIfNeeded(gc, settings);
 
@@ -345,6 +350,23 @@ namespace AutoExile.Systems
                 TickPositioning(ctx);
 
             return false;
+        }
+
+        private void UpdateAggressiveMovementIntent(Vector2 playerGrid, bool combatStrafe)
+        {
+            // Combat strafe drives its own cursor-walk and deliberately never sets
+            // WantsToMove (see TickPositioning) — don't override that here.
+            if (combatStrafe || SuppressPositioning || Profile.Positioning != CombatPositioning.Aggressive ||
+                BestTarget == null || NearbyMonsterCount == 0 || _walkableMonsterWeighted.Count == 0)
+                return;
+
+            var distance = Vector2.Distance(playerGrid, DenseClusterCenter);
+            if (distance <= 15f) return;
+
+            WantsToMove = true;
+            MoveTargetGrid = DenseClusterCenter;
+            MoveTarget = ToWorld(DenseClusterCenter);
+            LastAction = $"aggressive: pathfind to density @ ({DenseClusterCenter.X:F0},{DenseClusterCenter.Y:F0}) dist={distance:F0}";
         }
 
         /// <summary>Reset state (call on mode exit).</summary>
