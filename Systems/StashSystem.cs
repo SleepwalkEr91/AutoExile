@@ -536,8 +536,11 @@ namespace AutoExile.Systems
             var items = stashEl.VisibleStash?.VisibleInventoryItems;
             if (items == null)
             {
-                Status = "No items visible in withdraw tab";
-                AdvanceOrFinishWithdraw(gc);
+                // The selected tab index becomes visible before its item list is
+                // materialized. Treating that transient null as an empty stash
+                // skips withdrawal and later produces a false NoFragments stop.
+                // Stay in this phase; the existing phase timeout keeps the wait bounded.
+                Status = $"Waiting for withdraw tab contents ({haveInInv}/{wantTotal} have)";
                 return StashResult.InProgress;
             }
 
@@ -560,8 +563,20 @@ namespace AutoExile.Systems
 
             if (positions.Count == 0)
             {
-                Status = $"'{currentPath}' not found in tab ({haveInInv}/{wantTotal} have) — skipping";
-                AdvanceOrFinishWithdraw(gc);
+                // Multi-item queues intentionally tolerate an unavailable entry and
+                // continue to the next requested type. The single fragment path used
+                // by Simulacrum must be verified instead of silently skipped.
+                if (WithdrawList.Count > 0)
+                {
+                    Status = $"'{currentPath}' not found in tab ({haveInInv}/{wantTotal} have) — skipping";
+                    AdvanceOrFinishWithdraw(gc);
+                    return StashResult.InProgress;
+                }
+
+                // Empty label/entity data can also be transient immediately after
+                // a tab switch. Re-scan until the bounded stash phase timeout rather
+                // than declaring the configured resource tab empty from one frame.
+                Status = $"Waiting for '{currentPath}' in tab ({haveInInv}/{wantTotal} have)";
                 return StashResult.InProgress;
             }
 
