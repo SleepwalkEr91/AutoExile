@@ -191,7 +191,9 @@ namespace AutoExile.Modes.Shared
                     var need = target - have;
                     if (need > 0)
                     {
-                        activeWithdrawList.Add((path, need));
+                        // StashSystem expects the desired inventory total, not the
+                        // remaining delta; it subtracts the current inventory itself.
+                        activeWithdrawList.Add((path, target));
                         totalNeededFromList += need;
                     }
                 }
