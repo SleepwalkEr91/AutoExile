@@ -850,7 +850,11 @@ namespace AutoExile.Modes
 
         private bool TryCloseUniqueCombatLock(BotContext ctx, Vector2 playerPos)
         {
+            if (!_settings.HoldOnCloseUnique.Value)
+                return false;
+
             var gc = ctx.Game;
+            var blacklist = ctx.Combat.BlacklistedEnemies;
             var target = ctx.Combat.BestTarget;
             var targetDist = target != null ? Vector2.Distance(playerPos, target.GridPosNum) : float.MaxValue;
 
@@ -858,6 +862,7 @@ namespace AutoExile.Modes
                 target.Rarity != MonsterRarity.Unique ||
                 !target.IsAlive ||
                 !target.IsHostile ||
+                IsBlacklistedEnemy(target, blacklist) ||
                 targetDist > CloseUniqueCombatLockDistance)
             {
                 target = null;
@@ -867,7 +872,10 @@ namespace AutoExile.Modes
                     if (entity.Type != EntityType.Monster ||
                         entity.Rarity != MonsterRarity.Unique ||
                         !entity.IsAlive ||
-                        !entity.IsHostile)
+                        !entity.IsHostile ||
+                        // User-blacklisted enemies (e.g. Volatile Core) must not pin the
+                        // character in place — combat never targets them anyway.
+                        IsBlacklistedEnemy(entity, blacklist))
                         continue;
 
                     var distToUnique = Vector2.Distance(playerPos, entity.GridPosNum);
@@ -883,7 +891,10 @@ namespace AutoExile.Modes
                 return false;
 
             ctx.Navigation.Stop(gc);
-            BotInput.StopMovement();
+            // Combat Strafe moves via its own cursor-walk inside Combat.Tick. Stopping
+            // movement here would cancel that every tick and pin the character.
+            if (!ctx.Settings.Build.CombatStrafe.Value)
+                BotInput.StopMovement();
             _wasSearching = false;
             ctx.Exploration.SeenRadiusOverride = 0;
             _combatEngageTime = DateTime.MinValue;
@@ -900,6 +911,10 @@ namespace AutoExile.Modes
             StatusText = $"Wave {_state.CurrentWave}/15 - holding on boss ({targetDist:F0})";
             return true;
         }
+
+        private static bool IsBlacklistedEnemy(Entity entity, HashSet<string> blacklist) =>
+            blacklist.Count > 0 && !string.IsNullOrEmpty(entity.RenderName) &&
+            blacklist.Contains(entity.RenderName);
 
         private void TickExploreForMonsters(BotContext ctx)
         {

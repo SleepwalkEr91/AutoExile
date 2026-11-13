@@ -1305,7 +1305,7 @@ function renderModeTab(container, modeName) {
     } else if (section === 'simulacrum') {
       addSection(container, 'Simulacrum', [['simulacrum.simulacrumStock'],
         ['simulacrum.minWaveDelaySeconds'],['simulacrum.waveTimeoutMinutes'],
-        ['simulacrum.waitForFollower']]);
+        ['simulacrum.waitForFollower'],['simulacrum.holdOnCloseUnique']]);
       addSection(container, 'Follower Gate (shared)', [
         {key:'followerGate.followerNames', showIf:'simulacrum.waitForFollower'},
         {key:'followerGate.followerMaxDistance', showIf:'simulacrum.waitForFollower'}]);

@@ -513,6 +513,12 @@ namespace AutoExile.Systems
 
                 if (!entity.IsAlive) continue;
 
+                // Skip globally blacklisted enemies (user-configured by render name).
+                // Checked before dormant tracking so a blacklisted monster can't become
+                // the "approach this dormant monster" target either.
+                if (BlacklistedEnemies.Count > 0 && !string.IsNullOrEmpty(entity.RenderName) &&
+                    BlacklistedEnemies.Contains(entity.RenderName)) continue;
+
                 var closeUniqueOverride = entity.Rarity == MonsterRarity.Unique && dist <= 18f;
 
                 // Track dormant monsters (alive + hostile but not targetable yet).
@@ -552,10 +558,6 @@ namespace AutoExile.Systems
 
                 // Skip monsters trapped inside essence monoliths (cannot be damaged until released)
                 if (IsInsideMonolith(entity)) continue;
-
-                // Skip globally blacklisted enemies (user-configured by render name)
-                if (BlacklistedEnemies.Count > 0 && !string.IsNullOrEmpty(entity.RenderName) &&
-                    BlacklistedEnemies.Contains(entity.RenderName)) continue;
 
                 // Skip default path-blacklisted entities (never targetable decorations)
                 if (entity.Path != null)
