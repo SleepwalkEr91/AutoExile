@@ -70,16 +70,15 @@ namespace AutoExile.Systems
         public string ToggleStatus { get; private set; } = "";
         private DateTime _toggleStartTime;
         private DateTime _lastToggleAttempt = DateTime.MinValue;
-        private int _preToggleLabelCount;
         private const int ToggleDelayMs = 500;
 
         public enum LabelTogglePhase
         {
             Idle,
-            PressingOff,    // Pressed Z to hide, waiting for labels to disappear
-            WaitingOff,     // Verifying labels are gone
-            PressingOn,     // Pressed Z to show, waiting for labels to reappear
-            WaitingOn,      // Verifying labels returned
+            PressingOff,    // First Z sent; wait until its key-up/cooldown completes
+            WaitingOff,     // Wait briefly, then retry the paired restore Z until accepted
+            PressingOn,     // Restore Z accepted; wait until its key-up/cooldown completes
+            WaitingOn,      // Short settle period before allowing another scan
         }
 
         // State
@@ -170,7 +169,12 @@ namespace AutoExile.Systems
 
                 foreach (var label in labels)
                 {
-                    if (label.Label == null || !label.Label.IsVisible)
+                    // VisibleGroundItemLabels is already the game's visible-label set. ExileCore
+                    // can briefly report the inherited IsVisible flag as false while the local
+                    // label itself is rendered, so accept either visibility signal. Requiring
+                    // only IsVisible caused rendered loot to disappear from the candidate list.
+                    if (label.Label == null ||
+                        (!label.Label.IsVisible && !label.Label.IsVisibleLocal))
                         continue;
                     if (label.Entity == null)
                         continue;
@@ -382,7 +386,8 @@ namespace AutoExile.Systems
             {
                 foreach (var l in gc.IngameState.IngameUi.ItemsOnGroundLabelElement.LabelsOnGround)
                 {
-                    if (l?.ItemOnGround?.Id == entityId && l.Label?.IsVisible == true)
+                    if (l?.ItemOnGround?.Id == entityId && l.Label != null &&
+                        (l.Label.IsVisible || l.Label.IsVisibleLocal))
                     {
                         var r = l.Label.GetClientRect();
                         return new Vector2(r.X + r.Width / 2, r.Y + r.Height / 2);
@@ -409,7 +414,8 @@ namespace AutoExile.Systems
                 // First pass: find the target label's rect
                 foreach (var l in labels)
                 {
-                    if (l?.ItemOnGround?.Id == entityId && l.Label?.IsVisible == true)
+                    if (l?.ItemOnGround?.Id == entityId && l.Label != null &&
+                        (l.Label.IsVisible || l.Label.IsVisibleLocal))
                     {
                         targetRect = l.Label.GetClientRect();
                         break;
@@ -423,7 +429,7 @@ namespace AutoExile.Systems
                 foreach (var l in labels)
                 {
                     if (l?.ItemOnGround == null || l.ItemOnGround.Id == entityId) continue;
-                    if (l.Label == null || !l.Label.IsVisible) continue;
+                    if (l.Label == null || (!l.Label.IsVisible && !l.Label.IsVisibleLocal)) continue;
 
                     var o = l.Label.GetClientRect();
                     bool overlaps = t.X < o.X + o.Width && t.X + t.Width > o.X &&
@@ -471,8 +477,6 @@ namespace AutoExile.Systems
         {
             if (TogglePhase != LabelTogglePhase.Idle) return false;
 
-            _preToggleLabelCount = gc.IngameState.IngameUi.ItemsOnGroundLabelElement
-                .LabelsOnGroundVisible.Count;
             _lastToggleAttempt = DateTime.Now;
             _toggleStartTime = DateTime.Now;
 
@@ -494,22 +498,6 @@ namespace AutoExile.Systems
 
             var elapsed = (DateTime.Now - _toggleStartTime).TotalMilliseconds;
 
-            // Safety timeout — 3s max for the whole sequence
-            if (elapsed > 3000)
-            {
-                // If labels seem off (very few visible), press Z to restore
-                var currentCount = gc.IngameState.IngameUi.ItemsOnGroundLabelElement
-                    .LabelsOnGroundVisible.Count;
-                if (currentCount < _preToggleLabelCount / 2 && _preToggleLabelCount > 3)
-                {
-                    BotInput.PressKeyOverlay(System.Windows.Forms.Keys.Z);
-                    ToggleStatus = "Safety: restoring labels after timeout";
-                }
-                TogglePhase = LabelTogglePhase.Idle;
-                ToggleStatus = "";
-                return false;
-            }
-
             switch (TogglePhase)
             {
                 case LabelTogglePhase.PressingOff:
@@ -524,20 +512,14 @@ namespace AutoExile.Systems
                 {
                     if (elapsed < ToggleDelayMs) return true;
 
-                    // Verify labels actually disappeared
-                    var currentCount = gc.IngameState.IngameUi.ItemsOnGroundLabelElement
-                        .LabelsOnGroundVisible.Count;
-
-                    if (currentCount >= _preToggleLabelCount && _preToggleLabelCount > 3)
+                    // Once the first Z was accepted, never return to Idle until the paired
+                    // restore Z is also accepted. Label-count heuristics are stale when labels
+                    // overlap and previously allowed an unsafe single-Z exit.
+                    if (!BotInput.PressKeyOverlay(System.Windows.Forms.Keys.Z))
                     {
-                        // Labels didn't disappear — Z didn't work or wrong key. Abort.
-                        TogglePhase = LabelTogglePhase.Idle;
-                        ToggleStatus = "";
-                        return false;
+                        ToggleStatus = "Waiting to safely restore loot labels...";
+                        return true;
                     }
-
-                    // Labels are off — press Z again to turn them back on
-                    if (!BotInput.PressKeyOverlay(System.Windows.Forms.Keys.Z)) return true;
                     TogglePhase = LabelTogglePhase.PressingOn;
                     ToggleStatus = "Toggling labels back on...";
                     return true;
@@ -553,17 +535,6 @@ namespace AutoExile.Systems
                 case LabelTogglePhase.WaitingOn:
                 {
                     if (elapsed < ToggleDelayMs) return true;
-
-                    // Verify labels came back
-                    var currentCount = gc.IngameState.IngameUi.ItemsOnGroundLabelElement
-                        .LabelsOnGroundVisible.Count;
-
-                    if (currentCount <= 1 && _preToggleLabelCount > 3)
-                    {
-                        // Labels didn't come back — press Z one more time as safety
-                        BotInput.PressKeyOverlay(System.Windows.Forms.Keys.Z);
-                        ToggleStatus = "Safety: labels didn't return, pressing Z again";
-                    }
 
                     TogglePhase = LabelTogglePhase.Idle;
                     ToggleStatus = "";
