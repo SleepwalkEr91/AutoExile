@@ -1325,7 +1325,7 @@ function renderModeTab(container, modeName) {
     } else if (section === 'heist') {
       const heistDiv = document.createElement('div');
       const heistTitle = document.createElement('div'); heistTitle.className='section-divider'; heistTitle.textContent='Heist'; heistDiv.appendChild(heistTitle);
-      addFieldsTo(heistDiv, [['heist.alertThreshold'],['heist.maxChestDetour'],['heist.openRewardChests'],
+      addFieldsTo(heistDiv, [['heist.companionInteractHotkey'],['heist.alertThreshold'],['heist.maxChestDetour'],['heist.openRewardChests'],
         ['heist.companionWaitTimeout'],['heist.companionRetryDelay']]);
       const rewardLabel = document.createElement('div'); rewardLabel.className='section-divider'; rewardLabel.textContent='Reward Types'; heistDiv.appendChild(rewardLabel);
       const grid = document.createElement('div'); grid.className='check-grid';
