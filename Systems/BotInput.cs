@@ -1011,6 +1011,14 @@ namespace AutoExile.Systems
         public static void TrackHeldKey(Keys key) => _heldKeys[key] = DateTime.Now;
 
         /// <summary>
+        /// Incremented by every hold/release. A pending async HoldKeyAt only presses its
+        /// key if no newer hold or release happened while its cursor move was in flight —
+        /// otherwise a ReleaseAllKeys during that window would be followed by a late
+        /// key-down that stays held.
+        /// </summary>
+        private static long _holdGeneration;
+
+        /// <summary>
         /// Hold a key down (KeyDown without KeyUp). The key stays held until
         /// ReleaseKey, ReleaseAllKeys, or the timeout watchdog releases it.
         /// Automatically releases any previously held instance of this key.
@@ -1020,6 +1028,8 @@ namespace AutoExile.Systems
             if (TryCaptureReplay("HoldKey", key: key)) return true;
             if (!CanAct) return false;
 
+            // Supersede any targeted hold whose cursor movement is still pending.
+            Interlocked.Increment(ref _holdGeneration);
             SuspendMovement();
 
             // Release if already held (prevents double-down)
@@ -1052,22 +1062,37 @@ namespace AutoExile.Systems
 
             var moveMs = EstimateMoveMs(absPos);
             NextActionAt = DateTime.Now.AddMilliseconds(moveMs + ActionCooldownMs);
-            _ = DoHoldKeyAt(absPos, key);
+            var generation = Interlocked.Increment(ref _holdGeneration);
+            _ = DoHoldKeyAt(absPos, key, generation);
             return true;
         }
 
-        private static async Task DoHoldKeyAt(Vector2 absPos, Keys key)
+        private static async Task DoHoldKeyAt(Vector2 absPos, Keys key, long generation)
         {
             await MoveCursorTo(absPos);
+            if (generation != Volatile.Read(ref _holdGeneration)) return;
             await Task.Delay(RandSettle());
+            if (generation != Volatile.Read(ref _holdGeneration)) return;
             await SendDelay();
+            if (generation != Volatile.Read(ref _holdGeneration)) return;
             SendKeyDown(key);
             _heldKeys[key] = DateTime.Now;
+        }
+
+        /// <summary>Update a channelled skill cursor inside the world-safe region.</summary>
+        public static bool UpdateWorldSkillCursor(Vector2 absPos)
+        {
+            if (!ClampToWorldSafeZone(ref absPos)) return false;
+            Input.SetCursorPos(absPos);
+            return true;
         }
 
         /// <summary>Release a specific held key.</summary>
         public static void ReleaseKey(Keys key)
         {
+            // Cancel a matching hold even when its async cursor move has not yet
+            // reached the key-down/tracking step.
+            Interlocked.Increment(ref _holdGeneration);
             if (_heldKeys.Remove(key))
                 SendKeyUp(key);
         }
@@ -1078,6 +1103,8 @@ namespace AutoExile.Systems
         /// </summary>
         public static void ReleaseAllKeys()
         {
+            // Invalidate pending HoldKeyAt continuations before releasing keys.
+            Interlocked.Increment(ref _holdGeneration);
             if (_heldKeys.Count > 0)
             {
                 foreach (var key in _heldKeys.Keys)
