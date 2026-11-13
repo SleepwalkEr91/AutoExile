@@ -59,6 +59,28 @@ namespace AutoExile.Systems
             return true;
         }
 
+        // Keep world-directed cursor input away from UI-heavy screen edges (skill bar,
+        // flasks, minimap, buff bar). Ratios are relative to the game window, so they
+        // work for any resolution. UI clicks (stash, map device, labels) still use the
+        // full window via ClampToWindow so those controls remain reachable.
+        private const float WorldSafeMinXRatio = 0.0977f;
+        private const float WorldSafeMaxXRatio = 0.9023f;
+        private const float WorldSafeMinYRatio = 0.12f;
+        private const float WorldSafeMaxYRatio = 0.84f;
+
+        private static bool ClampToWorldSafeZone(ref Vector2 pos)
+        {
+            if (!ClampToWindow(ref pos)) return false;
+
+            pos.X = Math.Clamp(pos.X,
+                WindowRect.X + WindowRect.Width * WorldSafeMinXRatio,
+                WindowRect.X + WindowRect.Width * WorldSafeMaxXRatio);
+            pos.Y = Math.Clamp(pos.Y,
+                WindowRect.Y + WindowRect.Height * WorldSafeMinYRatio,
+                WindowRect.Y + WindowRect.Height * WorldSafeMaxYRatio);
+            return true;
+        }
+
         // ── Action Log ──
         private static readonly ActionRecord[] _actionLog = new ActionRecord[500];
         private static int _actionLogIndex;
@@ -738,7 +760,7 @@ namespace AutoExile.Systems
             }
 
             if (TryCaptureReplay("StartMovement", absScreenPos, moveKey)) return true;
-            if (!ClampToWindow(ref absScreenPos)) return false;
+            if (!ClampToWorldSafeZone(ref absScreenPos)) return false;
 
             // Move-only walks TO the cursor. If the target is on the player the
             // character stands still. Safety-nudge every call, including the
@@ -810,7 +832,7 @@ namespace AutoExile.Systems
         {
             if (!IsMovementActive || IsMovementSuspended) return false;
             if (TryCaptureReplay("UpdateMovementCursor", absScreenPos)) return true;
-            if (!ClampToWindow(ref absScreenPos)) return false;
+            if (!ClampToWorldSafeZone(ref absScreenPos)) return false;
             absScreenPos = NudgeOffPlayer(absScreenPos);
 
             // Throttle: only update if position changed significantly or enough time passed
@@ -1020,7 +1042,7 @@ namespace AutoExile.Systems
         {
             if (TryCaptureReplay("HoldKeyAt", absPos, key)) return true;
             if (!CanAct) return false;
-            if (!ClampToWindow(ref absPos)) return false;
+            if (!ClampToWorldSafeZone(ref absPos)) return false;
 
             SuspendMovement();
 
@@ -1201,7 +1223,7 @@ namespace AutoExile.Systems
         {
             if (TryCaptureReplay("CursorPressKey", absPos, key)) return true;
             if (!CanAct) { LogAction("CursorPressKey", absPos, key, false); return false; }
-            if (!ClampToWindow(ref absPos)) { LogAction("CursorPressKey", absPos, key, false); return false; }
+            if (!ClampToWorldSafeZone(ref absPos)) { LogAction("CursorPressKey", absPos, key, false); return false; }
             SuspendMovement();
             ReleaseAllKeys();
             var moveMs = EstimateMoveMs(absPos);
@@ -1216,7 +1238,7 @@ namespace AutoExile.Systems
         /// <summary>Force cursor+key press, bypassing the input gate. For dodge — survival trumps input cadence.</summary>
         public static bool ForceCursorPressKey(Vector2 absPos, Keys key)
         {
-            if (!ClampToWindow(ref absPos)) { LogAction("ForceCursorPressKey", absPos, key, false); return false; }
+            if (!ClampToWorldSafeZone(ref absPos)) { LogAction("ForceCursorPressKey", absPos, key, false); return false; }
             SuspendMovement();
             ReleaseAllKeys();
             var moveMs = EstimateMoveMs(absPos);
