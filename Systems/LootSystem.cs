@@ -265,9 +265,6 @@ namespace AutoExile.Systems
 
             var priceResult = GetPriceResult(gc, priceEntity);
             var chaosValue = priceResult.MaxChaosValue;
-
-            if (priceResult.DetailsId.Contains("voices", StringComparison.OrdinalIgnoreCase))
-                chaosValue = priceResult.MaxChaosValue / 150.0;
             var invSlots = GetInventorySlots(priceEntity);
             var chaosPerSlot = invSlots > 0 ? chaosValue / invSlots : chaosValue;
 
