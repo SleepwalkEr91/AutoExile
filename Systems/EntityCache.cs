@@ -90,13 +90,20 @@ namespace AutoExile.Systems
         }
 
         /// <summary>
-        /// Prune dead/invalid entities from type lists. Call periodically (~every 1s)
+        /// Prune invalid entities from type lists. Call periodically (~every 1s)
         /// to clean up entities that became invalid without a Remove event.
         /// Does NOT remove from _byId — entities may become valid again.
         /// </summary>
         public void Prune()
         {
-            PruneList(_monsters, e => e.IsValid && e.IsAlive && e.Type == EntityType.Monster);
+            // Keep monsters that are currently !IsAlive. Dormant/spawning monsters (e.g.
+            // Simulacrum waves, map bosses before activation, revives) can report
+            // IsAlive=false for a while and become alive later WITHOUT another
+            // EntityAdded callback. Pruning them here dropped them from the cache for
+            // good, so combat/threat logic believed an area was clear while monsters
+            // were still alive. All consumers filter IsAlive themselves (combat even
+            // uses dead monsters as corpse targets); EntityRemoved still drops them.
+            PruneList(_monsters, e => e.IsValid && e.Type == EntityType.Monster);
             // Chests/icons: keep until explicitly removed (they go IsTargetable=false, not invalid)
             PruneList(_worldItems, e => e.IsValid);
             PruneList(_areaTransitions, e => e.IsValid);
