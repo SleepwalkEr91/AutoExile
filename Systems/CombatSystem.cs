@@ -950,6 +950,7 @@ namespace AutoExile.Systems
                     OnlyWhenBuffMissing = slotConfig.OnlyWhenBuffMissing.Value,
                     OnlyOnLowLife = slotConfig.OnlyOnLowLife.Value,
                     SummonRecast = slotConfig.SummonRecast.Value,
+                    SummonCount = slotConfig.SummonCount.Value,
                     BuffDebuffName = slotConfig.BuffDebuffName.Value ?? "",
                     MinCastIntervalMs = slotConfig.MinCastIntervalMs.Value,
                     RequireTargetable = slotConfig.RequireTargetable.Value,
@@ -966,6 +967,26 @@ namespace AutoExile.Systems
                         {
                             if (stats.TryGetValue(GameStat.ActiveSkillBaseRadius, out var radius))
                                 entry.AoeRadius = radius;
+
+                            // Minion cap straight from the skill. Every minion skill carries its
+                            // limit as a stat named BaseNumberOf<X>Allowed — AnimatedWeapons,
+                            // Zombies, Skeletons, Spectres, Golems, RagingSpirits, Relics, Reapers
+                            // and ~20 more. Matching that shape by name beats a hard-coded
+                            // GameStat list: the enum differs between ExileCore builds, and a
+                            // member that no longer exists would break the build instead of just
+                            // missing a value. Runs once per skill bar refresh (~500ms), never
+                            // per tick, so the ToString() per stat is not on a hot path.
+                            foreach (var stat in stats)
+                            {
+                                if (stat.Value <= 0) continue;
+                                var statName = stat.Key.ToString();
+                                if (statName.StartsWith("BaseNumberOf", StringComparison.Ordinal)
+                                    && statName.EndsWith("Allowed", StringComparison.Ordinal))
+                                {
+                                    entry.SummonMaxFromStats = stat.Value;
+                                    break;
+                                }
+                            }
                         }
                     }
                     catch { }
@@ -1441,7 +1462,7 @@ namespace AutoExile.Systems
             // Summon recast — skip if enough minions deployed nearby
             if (entry.SummonRecast && entry.Skill != null)
             {
-                if (!ShouldResummon(entry.Skill, entry.Role, settings))
+                if (!ShouldResummon(entry, settings))
                 {
                     skipReason = "summon count already enough";
                     return false;
@@ -1653,14 +1674,27 @@ namespace AutoExile.Systems
         // Summon checking
         // ═══════════════════════════════════════════════════
 
-        private bool ShouldResummon(ActorSkill skill, SkillRole role, BotSettings.BuildSettings settings)
+        private bool ShouldResummon(SkillBarEntry entry, BotSettings.BuildSettings settings)
         {
             try
             {
+                var skill = entry.Skill;
+                if (skill == null) return true;
+
+                // ActorSkill.DeployedObjects lists ONLY this skill's own minions — verified in
+                // DevTree, where the Animate Weapon skill holds exactly its 22 weapons while
+                // Actor.DeployedObjects holds every minion the character has (zombies, spectres,
+                // golem, ...). So a plain Count is the right comparison, no filtering needed.
                 var deployed = skill.DeployedObjects;
                 if (deployed == null) return true;
 
-                var expected = settings.SummonExpectedCount.Value;
+                // Target count, in order of precedence: what the slot asks for, the cap the skill
+                // reports in its stats, and only then the shared fallback.
+                var expected = entry.SummonCount > 0
+                    ? entry.SummonCount
+                    : entry.SummonMaxFromStats > 0
+                        ? entry.SummonMaxFromStats
+                        : settings.SummonExpectedCount.Value;
 
                 // Below count — always resummon
                 if (deployed.Count < expected)
@@ -1669,7 +1703,7 @@ namespace AutoExile.Systems
                 // At cap — for targeted summons (totems/ballistae), check if ALL
                 // are near the combat target. If any are out of range, recast to
                 // place fresh totems on top of the current target.
-                if (role == SkillRole.Enemy)
+                if (entry.Role == SkillRole.Enemy)
                 {
                     var referencePos = BestTarget?.GridPosNum ?? PackCenter;
                     float effectiveRange = settings.CombatRange.Value;
@@ -2243,6 +2277,8 @@ namespace AutoExile.Systems
             public bool OnlyWhenBuffMissing;
             public bool OnlyOnLowLife;
             public bool SummonRecast;
+            public int SummonCount;          // from the slot; 0 = use SummonMaxFromStats
+            public int SummonMaxFromStats;   // cap the skill reports itself; 0 = none found
             public string BuffDebuffName = "";
             public int MinCastIntervalMs;
             public bool RequireTargetable;

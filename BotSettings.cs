@@ -225,8 +225,8 @@ namespace AutoExile
 
             // ── Summon ──
 
-            [Menu("Summon Expected Count", "Expected deployed count for summon skills. Recast if fewer.")]
-            public RangeNode<int> SummonExpectedCount { get; set; } = new RangeNode<int>(1, 1, 20);
+            [Menu("Summon Expected Count", "Fallback target count for summon slots that have neither their own Summon Count nor a cap in the skill's stats. Prefer the per-slot Summon Count — this one applies to every summon skill at once.")]
+            public RangeNode<int> SummonExpectedCount { get; set; } = new RangeNode<int>(1, 1, 100);
 
             // ── Flasks ──
 
@@ -296,8 +296,11 @@ namespace AutoExile
             [Menu("Only On Low Life", "Only use when HP is below guard threshold.")]
             public ToggleNode OnlyOnLowLife { get; set; } = new ToggleNode(false);
 
-            [Menu("Summon Recast", "Recast when deployed count below Summon Expected Count. For summon/minion skills.")]
+            [Menu("Summon Recast", "Recast while fewer minions are deployed than this slot's Summon Count. For summon/minion skills.")]
             public ToggleNode SummonRecast { get; set; } = new ToggleNode(false);
+
+            [Menu("Summon Count", "How many minions this slot should keep up. 0 = auto: take the cap the skill reports in its own stats (Animate Weapon exposes BaseNumberOfAnimatedWeaponsAllowed, zombies/skeletons/spectres/golems have their equivalents). Set a number only when the skill has no such stat or you deliberately want fewer. Only used with Summon Recast.")]
+            public RangeNode<int> SummonCount { get; set; } = new RangeNode<int>(0, 0, 100);
 
             [Menu("Min Cast Interval (ms)", "Minimum time between casts of this skill in milliseconds. 0=no limit. Prevents debuffs from overriding primary attacks.")]
             public RangeNode<int> MinCastIntervalMs { get; set; } = new RangeNode<int>(0, 0, 10000);
