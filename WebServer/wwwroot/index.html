@@ -1634,7 +1634,7 @@ function renderSkillsSection() {
       const roleRow = buildField(`${prefix}.role`, S[`${prefix}.role`]);
       body.appendChild(roleRow);
       const allFields = ['priority','canCrossTerrain','targetFilter','maxTargetRange','minNearbyEnemies',
-        'minCastIntervalMs','onlyWhenBuffMissing','buffDebuffName','onlyOnLowLife','summonRecast','requireTargetable'];
+        'minCastIntervalMs','onlyWhenBuffMissing','buffDebuffName','onlyOnLowLife','summonRecast','summonCount','requireTargetable'];
       for (const f of allFields) {
         const entry = S[`${prefix}.${f}`]; if (!entry) continue;
         body.appendChild(buildField(`${prefix}.${f}`, entry));
@@ -1683,7 +1683,7 @@ function changeSkillType(prefix, newType, configIdx) {
   // Merge resets with type defaults — defaults override resets, single write per key
   const resets = {
     priority: 5, canCrossTerrain: false, onlyWhenBuffMissing: false,
-    onlyOnLowLife: false, summonRecast: false, requireTargetable: false, minNearbyEnemies: 0,
+    onlyOnLowLife: false, summonRecast: false, summonCount: 0, requireTargetable: false, minNearbyEnemies: 0,
     minCastIntervalMs: 0, maxTargetRange: 0,
   };
   const merged = { ...resets, ...(typeDef.defaults || {}) };
