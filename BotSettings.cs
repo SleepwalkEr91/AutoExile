@@ -302,6 +302,9 @@ namespace AutoExile
             [Menu("Summon Count", "How many minions this slot should keep up. 0 = auto: take the cap the skill reports in its own stats (NumberOf<X>Allowed or BaseNumberOf<X>Allowed, e.g. NumberOfZombiesAllowed, BaseNumberOfAnimatedWeaponsAllowed). Set a number only when the skill has no such stat or you deliberately want fewer. Only used with Summon Recast.")]
             public RangeNode<int> SummonCount { get; set; } = new RangeNode<int>(0, 0, 100);
 
+            [Menu("Target Self", "Self role only: put the cursor on your character before casting, so the skill lands at your feet (Animate Weapon). Without it a Self skill is cast wherever the cursor happens to be. Moves the cursor, so it briefly interrupts movement and is skipped during loot pickup.")]
+            public ToggleNode TargetSelf { get; set; } = new ToggleNode(false);
+
             [Menu("Min Cast Interval (ms)", "Minimum time between casts of this skill in milliseconds. 0=no limit. Prevents debuffs from overriding primary attacks.")]
             public RangeNode<int> MinCastIntervalMs { get; set; } = new RangeNode<int>(0, 0, 10000);
 
