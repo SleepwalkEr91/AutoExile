@@ -1482,6 +1482,7 @@ function renderAllSettings() {
     {key:'loot.minUniqueChaosValue', showIf:'loot.skipLowValueUniques'},
     {key:'loot.minChaosPerSlot', note:'0 = disabled'}]);
   loot.appendChild(buildMustLootUniques());
+  addSection(loot, 'Unidentified Unique Prices', [{key:'loot.unidUniquePriceOverrides', note:'e.g. Voices=10div, Some Unique=150c'}]);
   addSection(loot, 'Cluster Jewels', [['loot.filterClusterJewels'],
     {key:'loot.minClusterJewelChaosValue', showIf:'loot.filterClusterJewels'}]);
   addSection(loot, 'Skill Gems', [['loot.filterSkillGems'],

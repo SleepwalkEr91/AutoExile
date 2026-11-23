@@ -390,6 +390,9 @@ namespace AutoExile
             [Menu("Must-Loot Uniques", "Comma-separated unique item names to always pick up regardless of value filtering. Use the web UI to search and add from poe.ninja data.")]
             public TextNode MustLootUniques { get; set; } = new TextNode("");
 
+            [Menu("Unidentified Unique Prices", "Fixed prices for unidentified uniques that poe.ninja cannot price, e.g. Voices (ninja only lists the identified variants, whose prices range from a few chaos to hundreds of divines). Comma-separated Name=Value with c or div, e.g. Voices=10div, Some Unique=150c. Only used when the item's art matches that unique alone. Replaces the highest-variant guess for both the unique value filter and the loot tracker.")]
+            public TextNode UnidUniquePriceOverrides { get; set; } = new TextNode("Voices=10div");
+
             // --- Label Toggle Unstick ---
 
             [Menu("Label Toggle Unstick", "Press Z to cycle loot labels off/on when items exist but labels are stacked off-screen. Allows re-looting after explosions.")]
