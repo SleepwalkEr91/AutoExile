@@ -1210,7 +1210,8 @@ function typeFromConfig(prefix) {
   if (role === 'Disabled') return 'disabled';
   if (role === 'PrimaryMovement') return 'move';
   if (role === 'MovementSkill') return 'blink';
-  if (role === 'Corpse') return 'corpse';
+  // Corpse-targeted summons (Raise Zombie) are Summon slots with Target Corpse on
+  if (role === 'Corpse') return S[prefix+'.summonRecast']?.value ? 'summon' : 'corpse';
   if (role === 'Enemy') {
     if (S[prefix+'.summonRecast']?.value) return 'totem';
     if (S[prefix+'.onlyWhenBuffMissing']?.value) return 'curse';
@@ -1656,6 +1657,24 @@ function renderSkillFields(container, prefix, skillType, configIdx) {
     const row = buildField(fullKey, entry);
     container.appendChild(row);
   }
+
+  // Summon slots can aim at a corpse instead of the player (Raise Zombie). Not a setting of
+  // its own: the toggle just switches the slot's role between Self and Corpse.
+  if (skillType === 'summon' && S[`${prefix}.role`]) {
+    const on = S[`${prefix}.role`].value === 'Corpse';
+    const row = buildField(`${prefix}.targetCorpse`, {
+      type: 'toggle', value: on, label: 'Target Corpse',
+      description: 'Cast on the nearest corpse instead of on yourself (Raise Zombie). Only fires in combat with a corpse within Combat Range.'
+    });
+    row.querySelector('input').onchange = function () { setTargetCorpse(prefix, this.checked); };
+    container.appendChild(row);
+  }
+}
+
+function setTargetCorpse(prefix, on) {
+  updateSetting(`${prefix}.role`, on ? 'Corpse' : 'Self');
+  // Without Summon Recast a Corpse slot reads back as "Corpse Skill" and casts on every corpse
+  if (on && S[`${prefix}.summonRecast`]) updateSetting(`${prefix}.summonRecast`, true);
 }
 
 function changeSkillType(prefix, newType, configIdx) {
