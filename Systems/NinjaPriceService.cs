@@ -192,6 +192,81 @@ namespace AutoExile.Systems
         public double ChaosPerDivine =>
             _currencyPrices.TryGetValue("Divine Orb", out var val) ? val : 0;
 
+        // ── Manual prices for unidentified uniques ──
+        // poe.ninja only lists identified uniques. For most that is fine, but some have variants
+        // whose prices differ by orders of magnitude and cannot be told apart while unidentified
+        // (Voices: 1 passive ~hundreds of div, 7 passives ~2c). Taking the highest variant then
+        // inflates the loot tracker. The user enters the unid price from trade instead.
+        private string _unidOverridesRaw = "";
+        private Dictionary<string, (double Value, bool InDivines)> _unidOverrides =
+            new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>Raw setting text, "Name=Value" pairs with c or div. Parsed only when it changes.</summary>
+        public string UnidUniquePriceOverrides
+        {
+            get => _unidOverridesRaw;
+            set
+            {
+                value ??= "";
+                if (value == _unidOverridesRaw) return;
+                _unidOverridesRaw = value;
+                _unidOverrides = ParseUnidOverrides(value);
+            }
+        }
+
+        private static Dictionary<string, (double Value, bool InDivines)> ParseUnidOverrides(string raw)
+        {
+            var result = new Dictionary<string, (double, bool)>(StringComparer.OrdinalIgnoreCase);
+            foreach (var part in raw.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            {
+                var eq = part.LastIndexOf('=');
+                if (eq <= 0) continue;
+                var name = part[..eq].Trim();
+                var valueText = part[(eq + 1)..].Trim().ToLowerInvariant().Replace(" ", "");
+                bool inDivines = valueText.EndsWith("div");
+                if (inDivines) valueText = valueText[..^3];
+                else if (valueText.EndsWith("c")) valueText = valueText[..^1];
+                if (name.Length > 0 &&
+                    double.TryParse(valueText, System.Globalization.NumberStyles.Float,
+                        System.Globalization.CultureInfo.InvariantCulture, out var v) && v > 0)
+                    result[name] = (v, inDivines);
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// Manual price for an unidentified unique, if its art maps to exactly one non-replica
+        /// unique and that unique has an entry in <see cref="UnidUniquePriceOverrides"/>.
+        /// Divine prices need the ninja Divine Orb rate; without it there is no override.
+        /// </summary>
+        private bool TryGetUnidOverride(Entity entity, out PriceResult result)
+        {
+            result = PriceResult.Zero;
+            var overrides = _unidOverrides;
+            if (overrides.Count == 0) return false;
+
+            string? only = null;
+            foreach (var name in GetCandidateNames(entity))
+            {
+                // Same replica rule as PriceUnidentifiedUnique
+                if (name.StartsWith("Replica ") && !name.StartsWith("Replica Dragonfang's Flight"))
+                    continue;
+                var bare = name.StartsWith("The ") ? name[4..] : name;
+                if (only == null) only = bare;
+                else if (!string.Equals(only, bare, StringComparison.OrdinalIgnoreCase)) return false;
+            }
+            if (only == null) return false;
+
+            if (!overrides.TryGetValue(only, out var entry) && !overrides.TryGetValue("The " + only, out entry))
+                return false;
+
+            var chaos = entry.InDivines ? entry.Value * ChaosPerDivine : entry.Value;
+            if (chaos <= 0) return false;
+
+            result = new PriceResult { MinChaosValue = chaos, MaxChaosValue = chaos, MatchCount = 1 };
+            return true;
+        }
+
         /// <summary>
         /// Get all skill gem price entries for valuation (e.g. transfigured gem EV calculation).
         /// Returns null if prices are not loaded or category is missing.
@@ -328,6 +403,8 @@ namespace AutoExile.Systems
             // ── Unidentified unique: use art mapping for candidates ──
             if (rarity == ItemRarity.Unique && !isIdentified)
             {
+                if (TryGetUnidOverride(entity, out var overridePrice))
+                    return overridePrice;
                 return PriceUnidentifiedUnique(entity);
             }
 

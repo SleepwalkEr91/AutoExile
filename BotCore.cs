@@ -634,6 +634,7 @@ namespace AutoExile
 
             // Sync loot settings
             _loot.SkipLowValueUniques = Settings.Loot.SkipLowValueUniques.Value;
+            _ninjaPrice.UnidUniquePriceOverrides = Settings.Loot.UnidUniquePriceOverrides.Value ?? "";
             _loot.MinUniqueChaosValue = Settings.Loot.MinUniqueChaosValue.Value;
             _loot.MinChaosPerSlot = Settings.Loot.MinChaosPerSlot.Value;
             _loot.IgnoreQuestItems = Settings.Loot.IgnoreQuestItems.Value;
