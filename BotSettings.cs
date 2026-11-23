@@ -299,7 +299,7 @@ namespace AutoExile
             [Menu("Summon Recast", "Recast while fewer minions are deployed than this slot's Summon Count. For summon/minion skills.")]
             public ToggleNode SummonRecast { get; set; } = new ToggleNode(false);
 
-            [Menu("Summon Count", "How many minions this slot should keep up. 0 = auto: take the cap the skill reports in its own stats (Animate Weapon exposes BaseNumberOfAnimatedWeaponsAllowed, zombies/skeletons/spectres/golems have their equivalents). Set a number only when the skill has no such stat or you deliberately want fewer. Only used with Summon Recast.")]
+            [Menu("Summon Count", "How many minions this slot should keep up. 0 = auto: take the cap the skill reports in its own stats (NumberOf<X>Allowed or BaseNumberOf<X>Allowed, e.g. NumberOfZombiesAllowed, BaseNumberOfAnimatedWeaponsAllowed). Set a number only when the skill has no such stat or you deliberately want fewer. Only used with Summon Recast.")]
             public RangeNode<int> SummonCount { get; set; } = new RangeNode<int>(0, 0, 100);
 
             [Menu("Min Cast Interval (ms)", "Minimum time between casts of this skill in milliseconds. 0=no limit. Prevents debuffs from overriding primary attacks.")]

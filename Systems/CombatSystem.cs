@@ -968,25 +968,28 @@ namespace AutoExile.Systems
                             if (stats.TryGetValue(GameStat.ActiveSkillBaseRadius, out var radius))
                                 entry.AoeRadius = radius;
 
-                            // Minion cap straight from the skill. Every minion skill carries its
-                            // limit as a stat named BaseNumberOf<X>Allowed — AnimatedWeapons,
-                            // Zombies, Skeletons, Spectres, Golems, RagingSpirits, Relics, Reapers
-                            // and ~20 more. Matching that shape by name beats a hard-coded
-                            // GameStat list: the enum differs between ExileCore builds, and a
-                            // member that no longer exists would break the build instead of just
-                            // missing a value. Runs once per skill bar refresh (~500ms), never
-                            // per tick, so the ToString() per stat is not on a hot path.
+                            // Minion cap straight from the skill. Minion skills carry their
+                            // limit as NumberOf<X>Allowed (Raise Zombie: NumberOfZombiesAllowed)
+                            // and/or BaseNumberOf<X>Allowed (Animate Weapon:
+                            // BaseNumberOfAnimatedWeaponsAllowed). The value without "Base" is the
+                            // final cap including gem level and modifiers, so it wins when both
+                            // exist. Matching that shape by name beats a hard-coded GameStat list:
+                            // the enum differs between ExileCore builds, and a member that no
+                            // longer exists would break the build instead of just missing a value.
+                            // Runs once per skill bar refresh (~500ms), never per tick, so the
+                            // ToString() per stat is not on a hot path.
+                            int baseCap = 0, finalCap = 0;
                             foreach (var stat in stats)
                             {
                                 if (stat.Value <= 0) continue;
                                 var statName = stat.Key.ToString();
-                                if (statName.StartsWith("BaseNumberOf", StringComparison.Ordinal)
-                                    && statName.EndsWith("Allowed", StringComparison.Ordinal))
-                                {
-                                    entry.SummonMaxFromStats = stat.Value;
-                                    break;
-                                }
+                                if (!statName.EndsWith("Allowed", StringComparison.Ordinal)) continue;
+                                if (statName.StartsWith("NumberOf", StringComparison.Ordinal))
+                                    finalCap = Math.Max(finalCap, stat.Value);
+                                else if (statName.StartsWith("BaseNumberOf", StringComparison.Ordinal))
+                                    baseCap = Math.Max(baseCap, stat.Value);
                             }
+                            entry.SummonMaxFromStats = finalCap > 0 ? finalCap : baseCap;
                         }
                     }
                     catch { }
