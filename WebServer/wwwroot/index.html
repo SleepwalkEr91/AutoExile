@@ -1174,7 +1174,7 @@ const SKILL_TYPES = {
   link:     { label:'Link (minion)', role:'Minion', fields:['priority','minCastIntervalMs','buffDebuffName'], defaults:{priority:6, onlyWhenBuffMissing:true, minCastIntervalMs:300} },
   corpse:   { label:'Corpse Skill', role:'Corpse', fields:['priority','buffDebuffName'], defaults:{priority:5, onlyWhenBuffMissing:true} },
   totem:    { label:'Totem', role:'Enemy', fields:['priority','summonCount','minNearbyEnemies','maxTargetRange','requireTargetable'], defaults:{priority:6, summonRecast:true, minNearbyEnemies:1} },
-  custom:   { label:'Custom', role:null, fields:['role','priority','canCrossTerrain','targetFilter','maxTargetRange','minNearbyEnemies','minCastIntervalMs','onlyWhenBuffMissing','buffDebuffName','onlyOnLowLife','summonRecast','summonCount','requireTargetable','isChannel'], defaults:{} },
+  custom:   { label:'Custom', role:null, fields:['role','priority','canCrossTerrain','targetFilter','maxTargetRange','minNearbyEnemies','minCastIntervalMs','onlyWhenBuffMissing','buffDebuffName','onlyOnLowLife','summonRecast','summonCount','targetSelf','requireTargetable','isChannel'], defaults:{} },
 };
 
 // Curse keywords for auto-detection
@@ -1635,7 +1635,7 @@ function renderSkillsSection() {
       const roleRow = buildField(`${prefix}.role`, S[`${prefix}.role`]);
       body.appendChild(roleRow);
       const allFields = ['priority','canCrossTerrain','targetFilter','maxTargetRange','minNearbyEnemies',
-        'minCastIntervalMs','onlyWhenBuffMissing','buffDebuffName','onlyOnLowLife','summonRecast','summonCount','requireTargetable'];
+        'minCastIntervalMs','onlyWhenBuffMissing','buffDebuffName','onlyOnLowLife','summonRecast','summonCount','targetSelf','requireTargetable'];
       for (const f of allFields) {
         const entry = S[`${prefix}.${f}`]; if (!entry) continue;
         body.appendChild(buildField(`${prefix}.${f}`, entry));
@@ -1658,16 +1658,25 @@ function renderSkillFields(container, prefix, skillType, configIdx) {
     container.appendChild(row);
   }
 
-  // Summon slots can aim at a corpse instead of the player (Raise Zombie). Not a setting of
-  // its own: the toggle just switches the slot's role between Self and Corpse.
+  // Where a summon is aimed. Target Corpse is not a setting of its own: it switches the slot's
+  // role between Self and Corpse (Raise Zombie). Target Self keeps the Self role and puts the
+  // cursor on the player before casting (Animate Weapon). The two exclude each other.
   if (skillType === 'summon' && S[`${prefix}.role`]) {
-    const on = S[`${prefix}.role`].value === 'Corpse';
-    const row = buildField(`${prefix}.targetCorpse`, {
-      type: 'toggle', value: on, label: 'Target Corpse',
-      description: 'Cast on the nearest corpse instead of on yourself (Raise Zombie). Only fires in combat with a corpse within Combat Range.'
+    const rerender = () => renderSkillFields(container, prefix, skillType, configIdx);
+    const corpseOn = S[`${prefix}.role`].value === 'Corpse';
+    const corpseRow = buildField(`${prefix}.targetCorpse`, {
+      type: 'toggle', value: corpseOn, label: 'Target Corpse',
+      description: 'Cast on the nearest corpse (Raise Zombie). Only fires in combat with a corpse within Combat Range.'
     });
-    row.querySelector('input').onchange = function () { setTargetCorpse(prefix, this.checked); };
-    container.appendChild(row);
+    corpseRow.querySelector('input').onchange = function () { setTargetCorpse(prefix, this.checked); rerender(); };
+    container.appendChild(corpseRow);
+
+    const selfEntry = S[`${prefix}.targetSelf`];
+    if (selfEntry) {
+      const selfRow = buildField(`${prefix}.targetSelf`, { ...selfEntry, value: !corpseOn && !!selfEntry.value });
+      selfRow.querySelector('input').onchange = function () { setTargetSelf(prefix, this.checked); rerender(); };
+      container.appendChild(selfRow);
+    }
   }
 }
 
@@ -1675,6 +1684,12 @@ function setTargetCorpse(prefix, on) {
   updateSetting(`${prefix}.role`, on ? 'Corpse' : 'Self');
   // Without Summon Recast a Corpse slot reads back as "Corpse Skill" and casts on every corpse
   if (on && S[`${prefix}.summonRecast`]) updateSetting(`${prefix}.summonRecast`, true);
+  if (on && S[`${prefix}.targetSelf`]?.value) updateSetting(`${prefix}.targetSelf`, false);
+}
+
+function setTargetSelf(prefix, on) {
+  updateSetting(`${prefix}.targetSelf`, on);
+  if (on && S[`${prefix}.role`]?.value === 'Corpse') updateSetting(`${prefix}.role`, 'Self');
 }
 
 function changeSkillType(prefix, newType, configIdx) {
@@ -1702,7 +1717,7 @@ function changeSkillType(prefix, newType, configIdx) {
   // Merge resets with type defaults — defaults override resets, single write per key
   const resets = {
     priority: 5, canCrossTerrain: false, onlyWhenBuffMissing: false,
-    onlyOnLowLife: false, summonRecast: false, summonCount: 0, requireTargetable: false, minNearbyEnemies: 0,
+    onlyOnLowLife: false, summonRecast: false, summonCount: 0, targetSelf: false, requireTargetable: false, minNearbyEnemies: 0,
     minCastIntervalMs: 0, maxTargetRange: 0,
   };
   const merged = { ...resets, ...(typeDef.defaults || {}) };

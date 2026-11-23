@@ -951,6 +951,7 @@ namespace AutoExile.Systems
                     OnlyOnLowLife = slotConfig.OnlyOnLowLife.Value,
                     SummonRecast = slotConfig.SummonRecast.Value,
                     SummonCount = slotConfig.SummonCount.Value,
+                    TargetSelf = slotConfig.TargetSelf.Value,
                     BuffDebuffName = slotConfig.BuffDebuffName.Value ?? "",
                     MinCastIntervalMs = slotConfig.MinCastIntervalMs.Value,
                     RequireTargetable = slotConfig.RequireTargetable.Value,
@@ -1283,7 +1284,16 @@ namespace AutoExile.Systems
                 if (entry.Skill != null && !entry.Skill.CanBeUsed) continue;
                 if (!CheckSkillConditions(gc, entry, settings)) continue;
 
-                UseSkill(gc, entry, null);
+                // Target Self: aim the cast at the player's own position (Animate Weapon) instead
+                // of wherever the cursor is. That takes the cursor, so honour the loot pickup lock.
+                Vector2? selfTarget = null;
+                if (entry.TargetSelf)
+                {
+                    if (SuppressTargetedSkills) continue;
+                    selfTarget = gc.Player.GridPosNum;
+                }
+
+                UseSkill(gc, entry, selfTarget);
                 return true;
             }
             return false;
@@ -2282,6 +2292,7 @@ namespace AutoExile.Systems
             public bool SummonRecast;
             public int SummonCount;          // from the slot; 0 = use SummonMaxFromStats
             public int SummonMaxFromStats;   // cap the skill reports itself; 0 = none found
+            public bool TargetSelf;          // Self role: cast at the player's position
             public string BuffDebuffName = "";
             public int MinCastIntervalMs;
             public bool RequireTargetable;
